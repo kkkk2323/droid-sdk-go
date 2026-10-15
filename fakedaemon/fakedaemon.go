@@ -27,7 +27,8 @@ type Scenario struct {
 	Turn             *Turn         `json:"turn,omitempty"`
 	ValidDirectories []string      `json:"validDirectories,omitempty"`
 	// Input holds more of the Fake Daemon's ScenarioInput (commands, skills,
-	// mcpServers, mcpRegistry, files, defaults, opened...), as JSON.
+	// mcpServers, mcpRegistry, files, defaults, opened, automations, crons...),
+	// as JSON.
 	Input map[string]any `json:"input,omitempty"`
 }
 

@@ -3921,7 +3921,7 @@ import { createInterface } from "node:readline";
 // fake-daemon/fake-daemon.ts
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 
 // node_modules/.pnpm/ws@8.22.0/node_modules/ws/wrapper.mjs
 var import_stream = __toESM(require_stream(), 1);
@@ -34993,8 +34993,8 @@ function rewriteKeyNames(ctx) {
       bySchema.set(entry.schema, entry);
   }
   const rewrites = /* @__PURE__ */ new Map();
-  for (const record2 of pendingRecords.get(ctx) ?? []) {
-    const seen = ctx.seen.get(record2);
+  for (const record3 of pendingRecords.get(ctx) ?? []) {
+    const seen = ctx.seen.get(record3);
     const names = (seen?.def ?? seen?.schema)?.propertyNames;
     if (!names || names === true || rewrites.has(names))
       continue;
@@ -38098,6 +38098,42 @@ var ListAvailableSessionsResult = external_exports2.object({
   hasMore: external_exports2.boolean(),
   nextCursor: external_exports2.number().optional()
 });
+var SessionCronRecord = external_exports2.object({
+  version: external_exports2.literal(1),
+  id: external_exports2.string(),
+  status: external_exports2.enum(["active", "held", "paused", "running", "error", "expired", "cancelled"]),
+  source: external_exports2.enum(["loop_command", "cron_tool", "automation", "migration"]),
+  schedule: external_exports2.object({
+    expression: external_exports2.string().trim().min(1),
+    recurring: external_exports2.boolean(),
+    nextRunAt: external_exports2.string().optional(),
+    firstFireGuardUntil: external_exports2.string().optional(),
+    timezone: external_exports2.literal("UTC")
+  }),
+  stats: external_exports2.object({
+    fireCount: external_exports2.number().int().nonnegative(),
+    lastRunAt: external_exports2.string().optional(),
+    lastCompletedAt: external_exports2.string().optional(),
+    lastError: external_exports2.string().optional()
+  }),
+  createdAt: external_exports2.string(),
+  updatedAt: external_exports2.string(),
+  heldAt: external_exports2.string().optional(),
+  holdReason: external_exports2.string().optional(),
+  kind: external_exports2.literal("session_prompt"),
+  scope: external_exports2.object({
+    type: external_exports2.literal("session"),
+    sessionId: external_exports2.string(),
+    sessionCwd: external_exports2.string(),
+    storageDir: external_exports2.string()
+  }),
+  runPolicy: external_exports2.object({ whenSessionInactive: external_exports2.literal("hold") }),
+  payload: external_exports2.object({
+    type: external_exports2.literal("prompt"),
+    prompt: external_exports2.string().trim().min(1),
+    target: external_exports2.object({ type: external_exports2.literal("same_session") })
+  })
+});
 var RESULT_SCHEMAS = {
   "daemon.authenticate": AuthenticateResult,
   "daemon.list_available_sessions": ListAvailableSessionsResult,
@@ -38114,7 +38150,13 @@ var RESULT_SCHEMAS = {
     error: external_exports2.string().optional(),
     resolvedPath: external_exports2.string().optional()
   }),
-  "daemon.unarchive_session": external_exports2.object({ success: external_exports2.boolean() })
+  "daemon.unarchive_session": external_exports2.object({ success: external_exports2.boolean() }),
+  "daemon.list_crons": external_exports2.object({ crons: external_exports2.array(SessionCronRecord) }),
+  "daemon.create_cron": external_exports2.object({ cron: SessionCronRecord }),
+  "daemon.update_cron": external_exports2.object({ cron: SessionCronRecord.nullable() }),
+  "daemon.delete_cron": external_exports2.object({ deleted: external_exports2.boolean() }),
+  "daemon.hold_session_crons": external_exports2.object({ heldCount: external_exports2.number().int().nonnegative() }),
+  "daemon.resume_session_crons": external_exports2.object({ resumedCount: external_exports2.number().int().nonnegative() })
 };
 var SessionInactivityParams = external_exports2.object({
   sessionId: external_exports2.string(),
@@ -38141,6 +38183,11 @@ var NOTIFICATION_SCHEMAS = {
     archivedAt: external_exports2.string().optional()
   }),
   "daemon.worktree.removed": external_exports2.object({ checkoutPath: external_exports2.string() }),
+  "daemon.cron.state_changed": external_exports2.object({
+    reason: external_exports2.enum(["created", "updated", "deleted"]),
+    cronIds: external_exports2.array(external_exports2.string()),
+    crons: external_exports2.array(SessionCronRecord).optional()
+  }),
   "daemon.worktree.branch_changed": external_exports2.object({
     checkoutPath: external_exports2.string(),
     branch: external_exports2.string().optional()
@@ -38199,7 +38246,7 @@ ${JSON.stringify(value).slice(0, 800)}`
 }
 
 // fake-daemon/scenario.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // fake-daemon/automations.ts
 import { randomUUID } from "node:crypto";
@@ -38325,6 +38372,125 @@ function automationHandlers(input2, sessions) {
       ];
       found.lastRunAt = now.toISOString();
       return { success: true, sessionId };
+    }
+  };
+}
+
+// fake-daemon/crons.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+var INACTIVE = /* @__PURE__ */ new Set(["expired", "cancelled"]);
+function record2(f, now) {
+  return {
+    version: 1,
+    id: f.id ?? randomUUID2(),
+    status: f.status ?? "active",
+    source: f.source ?? "loop_command",
+    schedule: {
+      expression: f.expression,
+      recurring: true,
+      ...f.nextRunAt ? { nextRunAt: f.nextRunAt } : {},
+      timezone: "UTC"
+    },
+    stats: {
+      fireCount: f.fireCount ?? 0,
+      ...f.lastRunAt ? { lastRunAt: f.lastRunAt } : {},
+      ...f.lastError ? { lastError: f.lastError } : {}
+    },
+    createdAt: now,
+    updatedAt: now,
+    ...f.status === "held" ? { heldAt: now, holdReason: f.holdReason ?? "daemon-start" } : {},
+    kind: "session_prompt",
+    scope: {
+      type: "session",
+      sessionId: f.sessionId,
+      sessionCwd: f.sessionCwd ?? "/Users/dev/project",
+      storageDir: `/Users/dev/.factory/crons/${f.sessionId}`
+    },
+    runPolicy: { whenSessionInactive: "hold" },
+    payload: { type: "prompt", prompt: f.prompt, target: { type: "same_session" } }
+  };
+}
+function cronHandlers(input2) {
+  const created = (/* @__PURE__ */ new Date()).toISOString();
+  const crons = (input2.crons ?? []).map((f) => record2(f, created));
+  const find = (id) => crons.find((c) => c.id === id);
+  const changed = (context, reason, changes) => {
+    if (changes.length === 0) return;
+    context.daemon.notifyDaemon("daemon.cron.state_changed", {
+      reason,
+      cronIds: changes.map((c) => c.id),
+      ...reason === "deleted" ? {} : { crons: changes }
+    });
+  };
+  const update = (c, patch) => {
+    Object.assign(c, patch, { updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+    if (c.status !== "held") {
+      delete c.heldAt;
+      delete c.holdReason;
+    }
+  };
+  const ofSession = (sessionId, status) => crons.filter((c) => c.scope.sessionId === sessionId && c.status === status);
+  return {
+    "daemon.list_crons": (params) => ({
+      crons: crons.filter(
+        (c) => (params["sessionId"] === void 0 || c.scope.sessionId === params["sessionId"]) && (params["includeInactive"] === true || !INACTIVE.has(c.status))
+      )
+    }),
+    "daemon.create_cron": (params, context) => {
+      const scope = params["scope"];
+      const schedule = params["schedule"];
+      const payload = params["payload"];
+      const c = record2(
+        {
+          sessionId: scope.sessionId,
+          sessionCwd: scope.sessionCwd,
+          prompt: payload.prompt,
+          expression: schedule.expression,
+          source: params["source"]
+        },
+        (/* @__PURE__ */ new Date()).toISOString()
+      );
+      crons.push(c);
+      changed(context, "created", [c]);
+      return { cron: c };
+    },
+    "daemon.update_cron": (params, context) => {
+      const c = find(params["cronId"]);
+      if (!c) return { cron: null };
+      const schedule = params["schedule"];
+      const payload = params["payload"];
+      update(c, {
+        ...typeof params["status"] === "string" ? { status: params["status"] } : {},
+        ...schedule ? { schedule: { ...c.schedule, expression: schedule.expression } } : {},
+        ...payload?.prompt ? { payload: { ...c.payload, prompt: payload.prompt } } : {}
+      });
+      changed(context, "updated", [c]);
+      return { cron: c };
+    },
+    "daemon.delete_cron": (params, context) => {
+      const c = find(params["cronId"]);
+      if (!c) return { deleted: false };
+      crons.splice(crons.indexOf(c), 1);
+      changed(context, "deleted", [c]);
+      return { deleted: true };
+    },
+    "daemon.hold_session_crons": (params, context) => {
+      const held = ofSession(params["sessionId"], "active");
+      for (const c of held) {
+        update(c, {
+          status: "held",
+          heldAt: (/* @__PURE__ */ new Date()).toISOString(),
+          holdReason: String(params["reason"])
+        });
+      }
+      changed(context, "updated", held);
+      return { heldCount: held.length };
+    },
+    "daemon.resume_session_crons": (params, context) => {
+      const resumed = ofSession(params["sessionId"], "held");
+      for (const c of resumed) update(c, { status: "active" });
+      changed(context, "updated", resumed);
+      return { resumedCount: resumed.length };
     }
   };
 }
@@ -38706,6 +38872,7 @@ function createScenario(input2) {
     },
     ...tools,
     ...automationHandlers(input2, sessions),
+    ...cronHandlers(input2),
     "daemon.list_skills": (params, context, request) => {
       activeOrThrow(params["sessionId"]);
       return tools["daemon.list_skills"](params, context, request);
@@ -39079,7 +39246,7 @@ var clock = Date.now() - 6 * 60 * 60 * 1e3;
 function userMessage(text) {
   clock += 1e3;
   return {
-    id: randomUUID2(),
+    id: randomUUID3(),
     role: "user",
     content: [{ type: "text", text }],
     createdAt: clock,
@@ -39090,7 +39257,7 @@ function userMessage(text) {
 function assistantMessage(text) {
   clock += 1e3;
   return {
-    id: randomUUID2(),
+    id: randomUUID3(),
     role: "assistant",
     content: [{ type: "text", text }],
     createdAt: clock,
@@ -39101,7 +39268,7 @@ function assistantMessage(text) {
 function session(title, cwd, messages = [], extra = {}) {
   clock += 6e4;
   return {
-    sessionId: randomUUID2(),
+    sessionId: randomUUID3(),
     title,
     cwd,
     updatedAt: Math.floor(clock / 1e3),
@@ -39140,14 +39307,14 @@ var FakeDaemon = class _FakeDaemon {
     this.#server = server;
     this.#wss = wss;
     this.scenario = scenario;
-    this.token = `test-token-${randomUUID3()}`;
+    this.token = `test-token-${randomUUID4()}`;
     this.url = `http://127.0.0.1:${port}`;
     this.meta = {
       app: "Droi",
       version: _FakeDaemon.appVersion,
       remoteAccess: true,
       name: "Test Mac",
-      computerId: randomUUID3()
+      computerId: randomUUID4()
     };
   }
   static async start(input2 = {}) {
@@ -39233,7 +39400,7 @@ var FakeDaemon = class _FakeDaemon {
   }
   /** Simulate "Reset pairing" in the Desktop Shell: a new token, the old one refused. */
   resetToken() {
-    this.token = `test-token-${randomUUID3()}`;
+    this.token = `test-token-${randomUUID4()}`;
     return this.token;
   }
   /** Where the Daemon would keep the Session's transcript, laid out as the real one does. */
@@ -39319,7 +39486,7 @@ var FakeDaemon = class _FakeDaemon {
    * connection and resolve with the first answer, mirroring ADR 0003.
    */
   request(method, params) {
-    const id = randomUUID3();
+    const id = randomUUID4();
     const answer = new Promise((resolve) => {
       this.#pendingClientAnswers.set(id, resolve);
     });
@@ -39440,13 +39607,13 @@ function rpcResponse(request, result) {
 }
 
 // fake-daemon/turns.ts
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function streamedReply(options) {
   return (params, context, request) => {
     const sessionId = String(params["sessionId"]);
     const text = String(params["text"]);
-    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID4();
+    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID5();
     void runTurn({
       daemon: context.daemon,
       sessionId,
@@ -39553,7 +39720,7 @@ async function runTurn(input2) {
   });
   daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "thinking" });
   input2.onTurnStart?.(turn);
-  const assistantMessageId = randomUUID4();
+  const assistantMessageId = randomUUID5();
   let full = "";
   for (const delta of input2.deltas) {
     await sleep(input2.delayMs ?? 150);
@@ -39614,10 +39781,10 @@ function permissionTurn(options) {
   return (params, context, request) => {
     const sessionId = String(params["sessionId"]);
     const daemon2 = context.daemon;
-    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID4();
+    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID5();
     void (async () => {
       startTurn(daemon2, sessionId, userMessageId, String(params["text"]), String(request.id));
-      const toolUseId = `call_${randomUUID4().slice(0, 8)}`;
+      const toolUseId = `call_${randomUUID5().slice(0, 8)}`;
       const toolUse = {
         type: "tool_use",
         id: toolUseId,
@@ -39666,12 +39833,12 @@ function permissionTurn(options) {
           toolUseId,
           content: "Command cancelled by user.",
           isError: true,
-          messageId: randomUUID4()
+          messageId: randomUUID5()
         });
         daemon2.notify(sessionId, {
           type: "create_message",
           message: {
-            id: randomUUID4(),
+            id: randomUUID5(),
             role: "assistant",
             content: [{ type: "text", text: "Understood, I will not run that." }],
             createdAt: now,
@@ -39688,7 +39855,7 @@ function permissionTurn(options) {
         toolUseId,
         content: options.toolOutput ?? "ok\n\n[Process exited with code 0]",
         isError: false,
-        messageId: randomUUID4()
+        messageId: randomUUID5()
       });
       await streamText(daemon2, sessionId, options.reply);
       finishTurn(daemon2, sessionId, userMessageId, "completed");
@@ -39700,10 +39867,10 @@ function askUserTurn(options) {
   return (params, context, request) => {
     const sessionId = String(params["sessionId"]);
     const daemon2 = context.daemon;
-    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID4();
+    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID5();
     void (async () => {
       startTurn(daemon2, sessionId, userMessageId, String(params["text"]), String(request.id));
-      const toolUseId = `call_${randomUUID4().slice(0, 8)}`;
+      const toolUseId = `call_${randomUUID5().slice(0, 8)}`;
       daemon2.notify(sessionId, {
         type: "tool_call",
         toolUse: { type: "tool_use", id: toolUseId, name: "AskUser", input: {} }
@@ -39733,7 +39900,7 @@ function askUserTurn(options) {
           toolUseId,
           content: "The user cancelled the questionnaire.",
           isError: true,
-          messageId: randomUUID4()
+          messageId: randomUUID5()
         });
         await streamText(daemon2, sessionId, "Understood, I will not ask.");
         finishTurn(daemon2, sessionId, userMessageId, "completed");
@@ -39746,7 +39913,7 @@ function askUserTurn(options) {
         toolUseId,
         content: `[answer] ${chosen}`,
         isError: false,
-        messageId: randomUUID4()
+        messageId: randomUUID5()
       });
       await streamText(daemon2, sessionId, `You chose ${chosen}.`);
       finishTurn(daemon2, sessionId, userMessageId, "completed");
@@ -39774,7 +39941,7 @@ function startTurn(daemon2, sessionId, userMessageId, text, requestId) {
   daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "thinking" });
 }
 async function streamText(daemon2, sessionId, text) {
-  const messageId = randomUUID4();
+  const messageId = randomUUID5();
   daemon2.notify(sessionId, {
     type: "droid_working_state_changed",
     newState: "streaming_assistant_message"
@@ -39806,7 +39973,7 @@ function todoTurn(options) {
   return (params, context, request) => {
     const sessionId = String(params["sessionId"]);
     const daemon2 = context.daemon;
-    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID4();
+    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID5();
     void (async () => {
       startTurn(daemon2, sessionId, userMessageId, String(params["text"]), String(request.id));
       activeTurns.set(sessionId, {
@@ -39816,7 +39983,7 @@ function todoTurn(options) {
         cancel() {
         }
       });
-      const toolUseId = `call_${randomUUID4().slice(0, 8)}`;
+      const toolUseId = `call_${randomUUID5().slice(0, 8)}`;
       daemon2.notify(sessionId, {
         type: "tool_call",
         toolUse: {
@@ -39833,7 +40000,7 @@ function todoTurn(options) {
         toolUseId,
         content: "TODO List Updated",
         isError: false,
-        messageId: randomUUID4()
+        messageId: randomUUID5()
       });
       await streamText(daemon2, sessionId, options.reply);
       finishTurn(daemon2, sessionId, userMessageId, "completed");
@@ -39846,12 +40013,12 @@ function structuredTurn(reply) {
     const sessionId = String(params["sessionId"]);
     const daemon2 = context.daemon;
     const text = String(params["text"]);
-    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID4();
+    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID5();
     void (async () => {
       startTurn(daemon2, sessionId, userMessageId, text, String(request.id));
       await sleep(50);
       const structuredOutput = reply(text);
-      const messageId = randomUUID4();
+      const messageId = randomUUID5();
       const now = Date.now();
       daemon2.notify(sessionId, {
         type: "create_message",

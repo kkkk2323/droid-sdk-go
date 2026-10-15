@@ -54,6 +54,44 @@ const ListAvailableSessionsResult = z.object({
   nextCursor: z.number().optional(),
 })
 
+// The SDK keeps its cron schemas to itself; this is SessionCronRecordSchema.
+const SessionCronRecord = z.object({
+  version: z.literal(1),
+  id: z.string(),
+  status: z.enum(['active', 'held', 'paused', 'running', 'error', 'expired', 'cancelled']),
+  source: z.enum(['loop_command', 'cron_tool', 'automation', 'migration']),
+  schedule: z.object({
+    expression: z.string().trim().min(1),
+    recurring: z.boolean(),
+    nextRunAt: z.string().optional(),
+    firstFireGuardUntil: z.string().optional(),
+    timezone: z.literal('UTC'),
+  }),
+  stats: z.object({
+    fireCount: z.number().int().nonnegative(),
+    lastRunAt: z.string().optional(),
+    lastCompletedAt: z.string().optional(),
+    lastError: z.string().optional(),
+  }),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  heldAt: z.string().optional(),
+  holdReason: z.string().optional(),
+  kind: z.literal('session_prompt'),
+  scope: z.object({
+    type: z.literal('session'),
+    sessionId: z.string(),
+    sessionCwd: z.string(),
+    storageDir: z.string(),
+  }),
+  runPolicy: z.object({ whenSessionInactive: z.literal('hold') }),
+  payload: z.object({
+    type: z.literal('prompt'),
+    prompt: z.string().trim().min(1),
+    target: z.object({ type: z.literal('same_session') }),
+  }),
+})
+
 /** Result schema per Daemon method; a method missing here is sent unchecked. */
 const RESULT_SCHEMAS: Record<string, ZodLike> = {
   'daemon.authenticate': AuthenticateResult,
@@ -72,6 +110,12 @@ const RESULT_SCHEMAS: Record<string, ZodLike> = {
     resolvedPath: z.string().optional(),
   }),
   'daemon.unarchive_session': z.object({ success: z.boolean() }),
+  'daemon.list_crons': z.object({ crons: z.array(SessionCronRecord) }),
+  'daemon.create_cron': z.object({ cron: SessionCronRecord }),
+  'daemon.update_cron': z.object({ cron: SessionCronRecord.nullable() }),
+  'daemon.delete_cron': z.object({ deleted: z.boolean() }),
+  'daemon.hold_session_crons': z.object({ heldCount: z.number().int().nonnegative() }),
+  'daemon.resume_session_crons': z.object({ resumedCount: z.number().int().nonnegative() }),
 }
 
 // The Daemon sends a Session's lifecycle on the same method; the SDK does not
@@ -103,6 +147,11 @@ const NOTIFICATION_SCHEMAS: Record<string, ZodLike> = {
     archivedAt: z.string().optional(),
   }),
   'daemon.worktree.removed': z.object({ checkoutPath: z.string() }),
+  'daemon.cron.state_changed': z.object({
+    reason: z.enum(['created', 'updated', 'deleted']),
+    cronIds: z.array(z.string()),
+    crons: z.array(SessionCronRecord).optional(),
+  }),
   'daemon.worktree.branch_changed': z.object({
     checkoutPath: z.string(),
     branch: z.string().optional(),

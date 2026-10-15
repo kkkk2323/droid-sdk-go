@@ -110,7 +110,7 @@ instead of running an agent, and checks every message it sends with
   built `dist/`), installed from this repository's tag:
 
   ```json
-  "@droi/fake-daemon": "github:kkkk2323/droid-sdk-go#v0.1.0&path:/fake-daemon"
+  "@droi/fake-daemon": "github:kkkk2323/droid-sdk-go#v0.2.0&path:/fake-daemon"
   ```
 
   `import { FakeDaemon } from '@droi/fake-daemon/fake-daemon'`. Set

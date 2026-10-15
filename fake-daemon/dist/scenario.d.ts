@@ -1,6 +1,7 @@
 import { type FakeDaemon } from './fake-daemon.js';
 import type { JsonRpcRequest } from './protocol.js';
 import { type AutomationFixture } from './automations.js';
+import { type CronFixture } from './crons.js';
 import { type ToolsInput } from './tools.js';
 export interface SessionFixture {
     sessionId: string;
@@ -133,6 +134,8 @@ export interface ScenarioInput {
     worktreeInspections?: Record<string, WorktreeInspectionFixture>;
     /** The local Automations the Daemon lists and runs. */
     automations?: AutomationFixture[];
+    /** The loops (session crons) the Daemon keeps. */
+    crons?: CronFixture[];
 }
 export declare const CONTEXT_BUDGET = 200000;
 export interface Scenario {

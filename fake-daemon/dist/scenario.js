@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { RpcError } from './fake-daemon.js';
 import { automationHandlers } from './automations.js';
+import { cronHandlers } from './crons.js';
 import { toolHandlers } from './tools.js';
 export const CONTEXT_BUDGET = 200_000;
 export function createScenario(input) {
@@ -231,6 +232,7 @@ export function createScenario(input) {
         },
         ...tools,
         ...automationHandlers(input, sessions),
+        ...cronHandlers(input),
         'daemon.list_skills': (params, context, request) => {
             activeOrThrow(params['sessionId']);
             return tools['daemon.list_skills'](params, context, request);
