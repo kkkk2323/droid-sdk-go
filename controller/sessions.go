@@ -430,13 +430,15 @@ func (c *Controller) stopContext() (context.Context, context.CancelFunc) {
 }
 
 // reloadSessions loads again, after a reconnect, the Sessions that were
-// loaded on the lost connection, so their notifications flow again.
+// loaded on the lost connection, so their notifications flow again. Each
+// load takes the spawn options stashed when it starts, not those of now: a
+// load the caller makes meanwhile may change them.
 func (c *Controller) reloadSessions() {
 	c.mu.Lock()
 	var todo []protocol.LoadSessionParams
-	for _, t := range c.sessions {
+	for id, t := range c.sessions {
 		if t.reload {
-			todo = append(todo, t.params)
+			todo = append(todo, protocol.LoadSessionParams{SessionID: id})
 		}
 	}
 	c.mu.Unlock()
