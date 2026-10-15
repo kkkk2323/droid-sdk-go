@@ -35,6 +35,9 @@ type tracked struct {
 
 type loadCall struct {
 	done chan struct{}
+	// params are the load's, with the stashed spawn options; zero for
+	// daemon.initialize_session.
+	params protocol.LoadSessionParams
 	// res is nil for daemon.initialize_session.
 	res *protocol.LoadSessionResult
 	err error
@@ -167,23 +170,34 @@ func withStashed(p, s protocol.LoadSessionParams) protocol.LoadSessionParams {
 	return p
 }
 
+// asksOtherSpawn reports whether p sets a spawn option that the load made
+// with used did not use, so that waiting for that load would drop it.
+func asksOtherSpawn(p, used protocol.LoadSessionParams) bool {
+	differs := func(a, b *bool) bool { return a != nil && (b == nil || *a != *b) }
+	return differs(p.DisableInactivityTimeout, used.DisableInactivityTimeout) ||
+		differs(p.DisableBuiltinSkills, used.DisableBuiltinSkills) ||
+		differs(p.SkipPermissionsUnsafe, used.SkipPermissionsUnsafe) ||
+		p.RuntimeSettingsPath != "" && p.RuntimeSettingsPath != used.RuntimeSettingsPath
+}
+
 // LoadSession loads a Session (daemon.load_session): the Controller then
 // follows its notifications, restores its pending prompts, and loads it
 // again after a reconnect. A load of a Session already being loaded waits
-// for that one. Spawn options left unset keep those of the last load.
+// for that one, and loads again after it when it asks for spawn options
+// that one did not use. Spawn options left unset keep those of the last load.
 func (c *Controller) LoadSession(ctx context.Context, p protocol.LoadSessionParams) (*protocol.LoadSessionResult, error) {
 	for {
 		c.mu.Lock()
 		t := c.track(p.SessionID)
 		if lc := t.loading; lc != nil {
 			c.mu.Unlock()
-			if err := lc.wait(ctx); err != nil || lc.res != nil {
+			if err := lc.wait(ctx); err != nil || lc.res != nil && !asksOtherSpawn(p, lc.params) {
 				return lc.res, err
 			}
 			continue
 		}
 		p = withStashed(p, t.params)
-		lc := &loadCall{done: make(chan struct{})}
+		lc := &loadCall{done: make(chan struct{}), params: p}
 		t.loading = lc
 		cl, cred, gen := c.client, c.cred, c.gen
 		c.mu.Unlock()
