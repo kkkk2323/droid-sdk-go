@@ -2,8 +2,8 @@
 // add and remove: one set per Fake Daemon, like the settings and mcp.json
 // behind the real one. Changes push `mcp_status_changed` to every connection
 // as the Daemon does when a connection comes or goes.
-import { RpcError, type FakeDaemon } from './fake-daemon'
-import type { MethodHandler } from './scenario'
+import { RpcError, type FakeDaemon } from './fake-daemon.js'
+import type { MethodHandler } from './scenario.js'
 
 export interface SkillFixture {
   name: string

@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
 // Authenticate calls daemon.authenticate.

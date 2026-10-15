@@ -1,0 +1,19 @@
+{
+  "name": "droid-sdk-go-workspace",
+  "private": true,
+  "description": "Builds the Fake Daemon: its package's dist and the bundle the Go tests embed",
+  "type": "module",
+  "packageManager": "pnpm@10.26.2",
+  "scripts": {
+    "build": "pnpm build:package && pnpm build:bundle",
+    "build:package": "rm -rf fake-daemon/dist && tsc -p fake-daemon/tsconfig.json",
+    "build:bundle": "esbuild fakedaemon/serve.ts --bundle --platform=node --format=esm --outfile=fakedaemon/fake-daemon.mjs --log-level=error \"--banner:js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "esbuild": "^0.27.3",
+    "typescript": "~7.0.2"
+  }
+}

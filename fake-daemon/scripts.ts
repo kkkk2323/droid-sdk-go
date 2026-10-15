@@ -10,7 +10,7 @@ import {
   toolResultMessage,
   userMessage,
   type MessageFixture,
-} from './scenario'
+} from './scenario.js'
 
 const cwd = '/Users/dev/acme-web'
 const LOG = '/Users/dev/.factory/artifacts/scripts/s1/toolu_script.log'

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	droid "github.com/kkkk2323/droi/packages/droid-sdk-go"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/controller"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/fakedaemon"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
+	droid "github.com/kkkk2323/droid-sdk-go"
+	"github.com/kkkk2323/droid-sdk-go/controller"
+	"github.com/kkkk2323/droid-sdk-go/fakedaemon"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
 // recorder keeps a Controller's events for a test to wait on.

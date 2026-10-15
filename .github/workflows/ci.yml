@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      # The package's dist and the Go tests' bundle are committed: they must
+      # be what the sources build.
+      - name: Built Fake Daemon is up to date
+        run: |
+          pnpm build
+          git diff --exit-code -- fake-daemon/dist fakedaemon/fake-daemon.mjs
+          test -z "$(git status --porcelain -- fake-daemon/dist)"
+
+      - name: Go checks
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          GOOS=windows go vet ./...
+          GOOS=darwin go vet ./...
+          go test -race ./...

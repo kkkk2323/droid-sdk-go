@@ -21,6 +21,6 @@ chunk=$(grep -l 'var DaemonClient = class' "$sdk"/chunk-*.mjs | head -1)
 node expose.cjs "$chunk" "$work/chunk.mjs"
 node split.cjs "$chunk" "$work/mod" >/dev/null
 node methods.cjs "$work/mod/daemon-sdk/src/DaemonClient.ts.js" "$work/methods.json"
-SDK_VERSION=$version GO_MODULE=github.com/kkkk2323/droi/packages/droid-sdk-go node gen.mjs "$work/chunk.mjs" "$work/methods.json" ../protocol
+SDK_VERSION=$version GO_MODULE=github.com/kkkk2323/droid-sdk-go node gen.mjs "$work/chunk.mjs" "$work/methods.json" ../protocol
 gofmt -w ../protocol ../zz_client_methods.go
 echo "generated from @factory/droid-sdk $version"

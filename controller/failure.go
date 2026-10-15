@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"syscall"
 
-	droid "github.com/kkkk2323/droi/packages/droid-sdk-go"
+	droid "github.com/kkkk2323/droid-sdk-go"
 )
 
 // FailureReason says why the Controller could not connect, as the TS SDK's

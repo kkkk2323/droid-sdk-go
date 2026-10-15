@@ -1,0 +1,9 @@
+packages:
+  - 'fake-daemon'
+
+onlyBuiltDependencies:
+  - esbuild
+
+# The same patch as droi's: the Fake Daemon checks its messages with these schemas.
+patchedDependencies:
+  '@factory/droid-sdk@0.9.1': patches/@factory__droid-sdk@0.9.1.patch

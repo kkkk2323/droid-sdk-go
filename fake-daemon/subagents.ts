@@ -7,7 +7,7 @@ import {
   toolCallMessage,
   toolResultMessage,
   userMessage,
-} from './scenario'
+} from './scenario.js'
 
 const cwd = '/Users/dev/acme-web'
 const explorerId = '0c1d2e3f-0000-4000-8000-00000000e001'

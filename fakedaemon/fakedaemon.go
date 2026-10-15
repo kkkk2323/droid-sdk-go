@@ -1,8 +1,7 @@
-// Package fakedaemon runs droi's Fake Daemon (droi/tests/fake-daemon), the
-// Node stand-in for `droid daemon` that droi's own tests use, for this
-// module's tests. It needs Node and a droi checkout with its dependencies
-// installed; DROI_DIR points at the checkout (by default the one holding this
-// module).
+// Package fakedaemon runs the Fake Daemon (../fake-daemon), the Node stand-in
+// for `droid daemon` and droi's Gateway, for Go tests. It embeds the Fake
+// Daemon bundled into one script (fake-daemon.mjs, written by `pnpm build`),
+// so it needs only Node at test time.
 package fakedaemon
 
 import (
@@ -14,15 +13,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-//go:embed serve.ts
-var serveTS string
+//go:embed fake-daemon.mjs
+var bundled []byte
 
 // Scenario says what the Fake Daemon answers.
 type Scenario struct {
@@ -98,62 +95,35 @@ type StartedSession struct {
 }
 
 var (
-	buildOnce sync.Once
+	writeOnce sync.Once
 	bundle    string
-	buildErr  error
+	writeErr  error
 )
 
-func droiDir() string {
-	if d := os.Getenv("DROI_DIR"); d != "" {
-		return d
-	}
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "..", "..")
-}
-
-// build bundles serve.ts and the Fake Daemon into one script, once per test
+// write puts the bundled Fake Daemon in a file Node can run, once per test
 // binary.
-func build() (string, error) {
-	buildOnce.Do(func() {
-		droi := droiDir()
-		esbuild := filepath.Join(droi, "node_modules", ".bin", "esbuild")
-		if _, err := os.Stat(esbuild); err != nil {
-			buildErr = fmt.Errorf("no droi checkout with dependencies at %s (set DROI_DIR): %w", droi, err)
+func write() (string, error) {
+	writeOnce.Do(func() {
+		if _, err := exec.LookPath("node"); err != nil {
+			writeErr = fmt.Errorf("the Fake Daemon needs Node: %w", err)
 			return
 		}
 		dir, err := os.MkdirTemp("", "droid-fake-daemon")
 		if err != nil {
-			buildErr = err
+			writeErr = err
 			return
 		}
-		entry := filepath.Join(dir, "serve.ts")
-		src := strings.ReplaceAll(serveTS, "'DROI/", "'"+droi+"/")
-		if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
-			buildErr = err
-			return
-		}
-		bundle = filepath.Join(dir, "serve.mjs")
-		// The Fake Daemon finds droi's package.json from its own location.
-		self := "file://" + filepath.Join(droi, "tests", "fake-daemon", "fake-daemon.ts")
-		cmd := exec.Command(esbuild, entry, "--bundle", "--platform=node", "--format=esm",
-			"--outfile="+bundle, "--log-level=error",
-			"--define:import.meta.url="+strconvQuote(self),
-			"--banner:js=import { createRequire } from 'module'; const require = createRequire("+strconvQuote(self)+");")
-		cmd.Dir = filepath.Join(droi, "tests")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			buildErr = fmt.Errorf("esbuild: %v: %s", err, out)
-		}
+		bundle = filepath.Join(dir, "fake-daemon.mjs")
+		writeErr = os.WriteFile(bundle, bundled, 0o644)
 	})
-	return bundle, buildErr
+	return bundle, writeErr
 }
 
-func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
-
 // Start runs a Fake Daemon for the test, skipping the test when there is no
-// droi checkout, and stops it when the test ends.
+// Node, and stops it when the test ends.
 func Start(t testing.TB, sc Scenario) *Daemon {
 	t.Helper()
-	script, err := build()
+	script, err := write()
 	if err != nil {
 		t.Skip(err)
 	}

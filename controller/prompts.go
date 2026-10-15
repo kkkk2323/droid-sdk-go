@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
-	droid "github.com/kkkk2323/droi/packages/droid-sdk-go"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
+	droid "github.com/kkkk2323/droid-sdk-go"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
 // Permission is a pending request of the agent to run tools.

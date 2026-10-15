@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
 func usageWithOutput(sessionID string, output float64) map[string]any {

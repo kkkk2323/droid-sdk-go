@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
-	droid "github.com/kkkk2323/droi/packages/droid-sdk-go"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/session"
+	droid "github.com/kkkk2323/droid-sdk-go"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/session"
 )
 
 const (

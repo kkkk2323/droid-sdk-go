@@ -3,13 +3,12 @@
 // Pairing Token at upgrade exactly like the Gateway does, replays a Scenario
 // instead of running an agent, and validates every message it sends with the
 // zod schemas exported by @factory/droid-sdk so the Client is exercised with
-// realistic data. (See ADR 0002.)
+// realistic data. (See droi's ADR 0002.)
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { Socket } from 'node:net'
 import { once } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
-import { readFileSync } from 'node:fs'
 import {
   GATEWAY_DAEMON_PATH,
   GATEWAY_META_PATH,
@@ -21,12 +20,12 @@ import {
   GATEWAY_SESSION_ID_QUERY,
   GATEWAY_TOKEN_QUERY,
   type GatewayMeta,
-} from '@droi/daemon-layer/gateway'
-import { validateOutbound, validateInboundEnvelope } from './schemas'
-import { createScenario, HOST_ID, type Scenario, type ScenarioInput } from './scenario'
-import type { JsonRpcRequest } from './protocol'
+} from './gateway.js'
+import { validateOutbound, validateInboundEnvelope } from './schemas.js'
+import { createScenario, HOST_ID, type Scenario, type ScenarioInput } from './scenario.js'
+import type { JsonRpcRequest } from './protocol.js'
 
-/** A Scratch Workspace request the Client sent the Gateway (ADR 0008). */
+/** A Scratch Workspace request the Client sent the Gateway (droi's ADR 0008). */
 export interface ScratchRequest {
   action: 'create' | 'trash' | 'restore'
   path: string
@@ -45,13 +44,10 @@ export interface RecordedRequest {
   id: string | number | null
 }
 
-const APP_VERSION = (
-  JSON.parse(readFileSync(new URL('../../apps/desktop/package.json', import.meta.url), 'utf8')) as {
-    version: string
-  }
-).version
-
 export class FakeDaemon {
+  /** The Droi version /meta answers from now on; a Client compares it with its own. */
+  static appVersion = '0.0.0'
+
   /** The current Pairing Token; resetToken() replaces it. */
   token: string
   /** What /meta answers, as the Gateway would; tests may change it. */
@@ -81,7 +77,7 @@ export class FakeDaemon {
     this.url = `http://127.0.0.1:${port}`
     this.meta = {
       app: 'Droi',
-      version: APP_VERSION,
+      version: FakeDaemon.appVersion,
       remoteAccess: true,
       name: 'Test Mac',
       computerId: randomUUID(),

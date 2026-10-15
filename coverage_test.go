@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/fakedaemon"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/fakedaemon"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
 func ptr[T any](v T) *T { return &v }

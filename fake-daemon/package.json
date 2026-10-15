@@ -1,0 +1,22 @@
+{
+  "name": "@droi/fake-daemon",
+  "version": "0.1.0",
+  "description": "A scripted stand-in for droid daemon and droi's Gateway, for Clients' tests",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@factory/droid-sdk": "0.9.1",
+    "@types/ws": "^8.18.1",
+    "ws": "^8.21.3",
+    "zod": "^4.6.5"
+  }
+}

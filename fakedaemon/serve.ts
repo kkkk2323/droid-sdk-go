@@ -1,10 +1,10 @@
-// Entry the Go tests bundle with esbuild: starts droi's Fake Daemon with a
+// Entry that `pnpm build` bundles into fake-daemon.mjs: starts the Fake Daemon with a
 // scenario from the DROID_FAKE_SCENARIO environment variable, prints its
 // WebSocket URL as one JSON line, then obeys JSON commands on stdin and
 // answers each with one JSON line on stdout.
 import { createInterface } from 'node:readline'
-import { FakeDaemon } from 'DROI/tests/fake-daemon/fake-daemon'
-import { session, userMessage, assistantMessage } from 'DROI/tests/fake-daemon/scenario'
+import { FakeDaemon } from '../fake-daemon/fake-daemon.js'
+import { session, userMessage, assistantMessage } from '../fake-daemon/scenario.js'
 import {
   streamedReply,
   permissionTurn,
@@ -14,7 +14,7 @@ import {
   interruptHandler,
   resolveQueuedHandler,
   withQueue,
-} from 'DROI/tests/fake-daemon/turns'
+} from '../fake-daemon/turns.js'
 
 type MessageSpec = {
   role: 'user' | 'assistant' | 'tool'

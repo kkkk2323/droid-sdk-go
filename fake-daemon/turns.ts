@@ -1,10 +1,10 @@
 // Scripted agent turns for Scenarios. Each helper emits the same notification
 // sequence a real Daemon produces (captured in docs/adr/0003-spike/raw.txt).
 import { randomUUID } from 'node:crypto'
-import type { FakeDaemon } from './fake-daemon'
-import type { JsonRpcRequest } from './protocol'
-import type { HandlerContext, MethodHandler } from './scenario'
-import { emptyTokenUsage } from './scenario'
+import type { FakeDaemon } from './fake-daemon.js'
+import type { JsonRpcRequest } from './protocol.js'
+import type { HandlerContext, MethodHandler } from './scenario.js'
+import { emptyTokenUsage } from './scenario.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 

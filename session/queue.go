@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
 // QueuedMessageKind says who holds a queued user message and when it goes

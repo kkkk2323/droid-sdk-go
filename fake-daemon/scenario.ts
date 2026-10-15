@@ -2,10 +2,10 @@
 // when to emit events. A Scenario starts from a list of Session fixtures and
 // default handlers for the read-only methods; tests override or add handlers.
 import { randomUUID } from 'node:crypto'
-import { RpcError, type FakeDaemon } from './fake-daemon'
-import type { JsonRpcRequest } from './protocol'
-import { automationHandlers, type AutomationFixture } from './automations'
-import { toolHandlers, type ToolsInput } from './tools'
+import { RpcError, type FakeDaemon } from './fake-daemon.js'
+import type { JsonRpcRequest } from './protocol.js'
+import { automationHandlers, type AutomationFixture } from './automations.js'
+import { toolHandlers, type ToolsInput } from './tools.js'
 
 export interface SessionFixture {
   sessionId: string

@@ -2,7 +2,7 @@
 // under ~/.factory/automations and runs on their schedules. A run is a
 // Session tagged `automation`, as the real one; dispatching one adds it.
 import { randomUUID } from 'node:crypto'
-import type { MethodHandler, SessionFixture } from './scenario'
+import type { MethodHandler, SessionFixture } from './scenario.js'
 
 export interface AutomationRunFixture {
   sessionId: string

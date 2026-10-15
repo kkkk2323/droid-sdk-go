@@ -7,6 +7,13 @@ no Node at run time.
 Checked against `droid daemon` 0.233.0 (protocol 1.245.0); types generated from
 `@factory/droid-sdk` 0.9.1 (protocol 1.201.1).
 
+```sh
+go get github.com/kkkk2323/droid-sdk-go@latest
+```
+
+It started in [droi](https://github.com/kkkk2323/droi), which still uses it, with
+the Fake Daemon below.
+
 ## Packages
 
 | Package        | What it is                                                                                                                                                                                                                                                                           | Written by         |
@@ -15,7 +22,7 @@ Checked against `droid daemon` 0.233.0 (protocol 1.245.0); types generated from
 | `droid` (root) | `Client`: one authenticated connection; a typed method for each of the 132 RPCs (`zz_client_methods.go`, generated), `Call`, `Subscribe`, `Handle`/`HandleLater`/`Respond` for the Daemon's own requests, frame recording                                                            | hand               |
 | `controller`   | Connects and authenticates, reconnects and reloads Sessions, loads a Session before a call that needs its worker, tracks permission and AskUser prompts (keeping an answer given while a worker is gone until it is back), feeds the store. Port of the TS `DaemonSessionController` | hand               |
 | `session`      | The Sessions' state: transcript built from streamed deltas, working state, settings, token usage, todos, queued and optimistic messages, subagents, display filtering. Port of the TS `MultiSessionStateManager`/`SessionStateManager`/`SessionStore`. No I/O                        | hand               |
-| `fakedaemon`   | Runs droi's Fake Daemon (Node) for tests                                                                                                                                                                                                                                             | hand               |
+| `fakedaemon`   | Runs the Fake Daemon (Node) for Go tests                                                                                                                                                                                                                                             | hand               |
 
 ## Use
 
@@ -87,15 +94,38 @@ store subscriber must not block.
 - Fields newer than the 0.9.1 schemas: `seq` on `create_message` and
   messages, `migrationActive` on settings. Decoding ignores them.
 
+## Fake Daemon
+
+`fake-daemon/` is a scripted stand-in for `droid daemon` and for droi's
+Gateway in front of it (Pairing Token, `/meta`, Scratch Workspaces, session
+files). It speaks the Daemon's protocol over WebSocket, replays a Scenario
+instead of running an agent, and checks every message it sends with
+`@factory/droid-sdk`'s zod schemas (patched as droi patches them, in
+`patches/`). Clients' tests run against it, so they never need a Factory key.
+
+- **Go:** `fakedaemon.Start(t, scenario)` runs it in Node and gives its URL.
+  The package embeds the Fake Daemon bundled into one script
+  (`fakedaemon/fake-daemon.mjs`), so a test needs only `node` on PATH.
+- **TypeScript:** the npm package `@droi/fake-daemon` (`fake-daemon/`, with its
+  built `dist/`), installed from this repository's tag:
+
+  ```json
+  "@droi/fake-daemon": "github:kkkk2323/droid-sdk-go#v0.1.0&path:/fake-daemon"
+  ```
+
+  `import { FakeDaemon } from '@droi/fake-daemon/fake-daemon'`. Set
+  `FakeDaemon.appVersion` to the Droi version `/meta` should answer.
+
+After changing `fake-daemon/` or `fakedaemon/serve.ts`, run `pnpm build` and
+commit what it writes (`fake-daemon/dist`, `fakedaemon/fake-daemon.mjs`); CI
+fails when they are out of date.
+
 ## Tests
 
 ```sh
-go test -race ./...      # unit + Fake Daemon (skipped without a droi checkout)
+pnpm install && pnpm typecheck
+go test -race ./...      # unit + Fake Daemon (skipped without Node)
 ```
-
-The Fake Daemon tests need droi's checkout with dependencies installed
-(`DROI_DIR`, `~/dev/droi` by default) and Node; they bundle
-`fakedaemon/serve.ts` with droi's esbuild.
 
 Live tests run a throwaway `droid daemon` in a temporary HOME:
 

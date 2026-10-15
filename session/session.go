@@ -4,7 +4,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
 // Session is a handle on one Session of a Store (the TypeScript

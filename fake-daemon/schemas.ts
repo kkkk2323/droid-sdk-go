@@ -14,7 +14,7 @@ import {
   UpdateSessionSettingsResultSchema,
 } from '@factory/droid-sdk'
 import { z } from 'zod'
-import { JsonRpcRequestSchema, type JsonRpcRequest } from './protocol'
+import { JsonRpcRequestSchema, type JsonRpcRequest } from './protocol.js'
 
 interface ZodLike {
   safeParse(value: unknown): { success: boolean; error?: { message: string } }

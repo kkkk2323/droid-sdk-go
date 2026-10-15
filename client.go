@@ -17,7 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
 const (

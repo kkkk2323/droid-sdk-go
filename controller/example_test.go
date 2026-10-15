@@ -6,10 +6,10 @@ import (
 	"log"
 	"os"
 
-	droid "github.com/kkkk2323/droi/packages/droid-sdk-go"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/controller"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/protocol"
-	"github.com/kkkk2323/droi/packages/droid-sdk-go/session"
+	droid "github.com/kkkk2323/droid-sdk-go"
+	"github.com/kkkk2323/droid-sdk-go/controller"
+	"github.com/kkkk2323/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/session"
 )
 
 // A Session started, a message sent, permission prompts answered and the
