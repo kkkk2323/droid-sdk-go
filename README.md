@@ -93,6 +93,13 @@ store subscriber must not block.
 - An unknown Session is -32004 (`controller.ErrSessionNotFound`).
 - Fields newer than the 0.9.1 schemas: `seq` on `create_message` and
   messages, `migrationActive` on settings. Decoding ignores them.
+- Spec mode (droid 0.244): ExitSpecMode asks with `exit_spec_mode` details
+  that say `supportsClientStartedHandoff`. Answered with a
+  `proceed_new_session*` option and `clientStartsHandoffSession`, the
+  Daemon creates the new Session without starting it
+  (`spec_handoff_session_created`, newer than the 0.9.1 schemas) and the
+  Client loads it and sends the plan: `PermissionAnswer.ClientStartsHandoffSession`,
+  reported by `SpecHandoffStarted` or `SpecHandoffFailed`.
 
 ## Fake Daemon
 
@@ -106,6 +113,9 @@ instead of running an agent, and checks every message it sends with
 - **Go:** `fakedaemon.Start(t, scenario)` runs it in Node and gives its URL.
   The package embeds the Fake Daemon bundled into one script
   (`fakedaemon/fake-daemon.mjs`), so a test needs only `node` on PATH.
+  `fakedaemon.Turn` scripts the agent: a reply, a permission, AskUser, a
+  todo list, structured output, or `spec` (ExitSpecMode and its handoff, as
+  droid 0.244 does them).
 - **TypeScript:** the npm package `@droi/fake-daemon` (`fake-daemon/`, with its
   built `dist/`), installed from this repository's tag:
 

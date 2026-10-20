@@ -41,6 +41,13 @@ type PermissionAnswer struct {
 	SelectedOption    protocol.ToolConfirmationOutcome
 	Comment           string
 	EditedSpecContent string
+	// ClientStartsHandoffSession, for an exit_spec_mode answer with a
+	// proceed_new_session* option (when the details say
+	// supportsClientStartedHandoff), has this Client start the new Session:
+	// the Daemon creates it without starting it, and the Controller then
+	// loads it and sends it its first message, reporting SpecHandoffStarted
+	// or SpecHandoffFailed.
+	ClientStartsHandoffSession bool
 }
 
 // prompts is the Controller's prompt state, guarded by Controller.mu.
@@ -57,11 +64,21 @@ type prompts struct {
 	// concurrent Sessions have shown more than one permission at once; one
 	// being answered does not mean the rest are stale.
 	concurrent map[string]bool
+	// handoffs are the spec handoffs this Client starts, by the Session
+	// whose worker asked, until the Daemon reports the new Session or the
+	// turn ends without it.
+	handoffs map[string]specHandoff
 }
 
 type bufferedPermission struct {
-	sessionID string
-	answer    PermissionAnswer
+	sessionID     string
+	answer        PermissionAnswer
+	specHandoffID string
+}
+
+type specHandoff struct {
+	id        string
+	requestID string
 }
 
 func newPrompts() prompts {
@@ -72,6 +89,7 @@ func newPrompts() prompts {
 		bufAsk:     map[string]map[string]protocol.AskUserResult{},
 		inactive:   map[string]bool{},
 		concurrent: map[string]bool{},
+		handoffs:   map[string]specHandoff{},
 	}
 }
 
@@ -88,12 +106,24 @@ func firstToolUseID(tu []protocol.ToolConfirmationInfo) string {
 	return tu[0].ToolUse.ID
 }
 
-func permissionResponse(sessionID string, a PermissionAnswer) protocol.RequestPermissionResponse {
-	return protocol.RequestPermissionResponse{
-		SessionID:         sessionID,
-		SelectedOption:    a.SelectedOption,
-		Comment:           a.Comment,
-		EditedSpecContent: a.EditedSpecContent,
+// permissionResponseWire adds the fields of a client-started spec handoff,
+// newer than the generated schemas.
+type permissionResponseWire struct {
+	protocol.RequestPermissionResponse
+	ClientStartsHandoffSession bool   `json:"clientStartsHandoffSession,omitempty"`
+	SpecHandoffID              string `json:"specHandoffId,omitempty"`
+}
+
+func permissionResponse(sessionID string, a PermissionAnswer, specHandoffID string) permissionResponseWire {
+	return permissionResponseWire{
+		RequestPermissionResponse: protocol.RequestPermissionResponse{
+			SessionID:         sessionID,
+			SelectedOption:    a.SelectedOption,
+			Comment:           a.Comment,
+			EditedSpecContent: a.EditedSpecContent,
+		},
+		ClientStartsHandoffSession: a.ClientStartsHandoffSession,
+		SpecHandoffID:              specHandoffID,
 	}
 }
 
@@ -289,7 +319,7 @@ func (p *prompts) restore(sessionID string, res *protocol.LoadSessionResult, ass
 		if b, ok := p.bufPerm[firstToolUseID(pp.ToolUses)]; ok && b.sessionID == sessionID {
 			delete(p.bufPerm, firstToolUseID(pp.ToolUses))
 			out = p.dropPermission(pp.RequestID, b.answer.SelectedOption, out)
-			replies = append(replies, reply{pp.RequestID, permissionResponse(sessionID, b.answer)})
+			replies = append(replies, reply{pp.RequestID, permissionResponse(sessionID, b.answer, b.specHandoffID)})
 			continue
 		}
 		out = p.addPermission(&Permission{
@@ -364,7 +394,7 @@ func (c *Controller) onPermissionRequest(gen int, r droid.Request) {
 	c.mu.Lock()
 	if b, ok := c.prompts.bufPerm[firstToolUseID(p.ToolUses)]; ok && b.sessionID == p.SessionID {
 		delete(c.prompts.bufPerm, firstToolUseID(p.ToolUses))
-		replies = append(replies, reply{r.ID, permissionResponse(p.SessionID, b.answer)})
+		replies = append(replies, reply{r.ID, permissionResponse(p.SessionID, b.answer, b.specHandoffID)})
 	} else {
 		out = c.prompts.addPermission(&Permission{
 			RequestID:            r.ID,
@@ -480,9 +510,10 @@ func (c *Controller) RespondToPermission(ctx context.Context, requestID string, 
 		return fmt.Errorf("droid: option %q is not one of the permission's options", a.SelectedOption)
 	}
 	sessionID, toolUseID := p.SessionID, firstToolUseID(p.ToolUses)
+	handoffID, newHandoff := c.prompts.startHandoff(sessionID, requestID, a.ClientStartsHandoffSession)
 	cl := c.client
 	if cl == nil || c.prompts.inactive[sessionID] {
-		out := c.bufferPermission(requestID, sessionID, toolUseID, a)
+		out := c.bufferPermission(requestID, sessionID, toolUseID, a, handoffID)
 		c.mu.Unlock()
 		c.push(out)
 		if cl != nil {
@@ -491,12 +522,19 @@ func (c *Controller) RespondToPermission(ctx context.Context, requestID string, 
 		return nil
 	}
 	c.mu.Unlock()
-	if err := cl.Respond(ctx, requestID, permissionResponse(sessionID, a)); err != nil {
+	if err := cl.Respond(ctx, requestID, permissionResponse(sessionID, a, handoffID)); err != nil {
 		if cl.Err() == nil {
+			if newHandoff {
+				c.mu.Lock()
+				if h, ok := c.prompts.handoffs[sessionID]; ok && h.id == handoffID {
+					delete(c.prompts.handoffs, sessionID)
+				}
+				c.mu.Unlock()
+			}
 			return err
 		}
 		c.mu.Lock()
-		out := c.bufferPermission(requestID, sessionID, toolUseID, a)
+		out := c.bufferPermission(requestID, sessionID, toolUseID, a, handoffID)
 		c.mu.Unlock()
 		c.push(out)
 		return nil
@@ -508,9 +546,9 @@ func (c *Controller) RespondToPermission(ctx context.Context, requestID string, 
 	return nil
 }
 
-func (c *Controller) bufferPermission(requestID, sessionID, toolUseID string, a PermissionAnswer) []Event {
+func (c *Controller) bufferPermission(requestID, sessionID, toolUseID string, a PermissionAnswer, specHandoffID string) []Event {
 	if toolUseID != "" {
-		c.prompts.bufPerm[toolUseID] = bufferedPermission{sessionID: sessionID, answer: a}
+		c.prompts.bufPerm[toolUseID] = bufferedPermission{sessionID: sessionID, answer: a, specHandoffID: specHandoffID}
 	} else {
 		c.log.Warn("droid: permission without tool use cannot wait for its Session", "requestId", requestID)
 	}

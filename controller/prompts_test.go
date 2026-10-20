@@ -38,7 +38,7 @@ func TestRestoreReplaysAnswerKeptWhileInactive(t *testing.T) {
 	if len(replies) != 1 || replies[0].id != "r2" {
 		t.Fatalf("replies: %+v", replies)
 	}
-	if r := replies[0].result.(protocol.RequestPermissionResponse); r.SelectedOption != protocol.ToolConfirmationOutcomeProceedOnce || r.SessionID != "s" {
+	if r := replies[0].result.(permissionResponseWire); r.SelectedOption != protocol.ToolConfirmationOutcomeProceedOnce || r.SessionID != "s" {
 		t.Fatalf("replayed %+v", r)
 	}
 	if _, ok := p.bufPerm["tu1"]; ok {

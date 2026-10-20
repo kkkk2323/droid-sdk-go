@@ -69,6 +69,24 @@ type SessionInitialized struct {
 // SessionNotFound: the Daemon does not know a Session that was loaded.
 type SessionNotFound struct{ SessionID string }
 
+// SpecHandoffStarted: the Session a spec handoff answer asked for
+// (PermissionAnswer.ClientStartsHandoffSession) was created, loaded and sent
+// the plan. SessionID is the Session that asked, RequestID its permission.
+type SpecHandoffStarted struct {
+	SessionID    string
+	NewSessionID string
+	RequestID    string
+}
+
+// SpecHandoffFailed: the Session a spec handoff answer asked for was not
+// created (the turn ended without it, or the asking Session could not be
+// resumed), or could not be loaded or sent the plan.
+type SpecHandoffFailed struct {
+	SessionID string
+	RequestID string
+	Err       error
+}
+
 func (StatusChanged) event()       {}
 func (SessionNotification) event() {}
 func (DaemonNotification) event()  {}
@@ -79,6 +97,8 @@ func (AskUserResolved) event()     {}
 func (SessionLoaded) event()       {}
 func (SessionInitialized) event()  {}
 func (SessionNotFound) event()     {}
+func (SpecHandoffStarted) event()  {}
+func (SpecHandoffFailed) event()   {}
 
 // eventQueue delivers events in order on its own goroutine, so a subscriber
 // may call the Controller (and block on the Daemon) without stalling the

@@ -404,11 +404,17 @@ func (c *Controller) selfResume(sessionID string) {
 		delay := selfResumeDelay
 		for attempt := 1; attempt <= selfResumeAttempts; attempt++ {
 			_, err := c.LoadSession(ctx, params)
-			if err == nil || errors.Is(err, ErrSessionNotFound) {
+			if err == nil {
+				return
+			}
+			if errors.Is(err, ErrSessionNotFound) {
+				c.failHandoff(sessionID, err)
 				return
 			}
 			c.log.Warn("droid: resume after answer failed", "sessionId", sessionID, "attempt", attempt, "err", err)
-			if attempt < selfResumeAttempts && c.sleep(ctx, delay) != nil {
+			if attempt == selfResumeAttempts {
+				c.failHandoff(sessionID, err)
+			} else if c.sleep(ctx, delay) != nil {
 				return
 			}
 			delay = min(delay*2, selfResumeMaxDelay)
@@ -478,6 +484,12 @@ func (c *Controller) applyNotification(sessionID string, v any, p protocol.Sessi
 	case *protocol.SessionClosedNotification:
 		out = c.prompts.forgetSession(sessionID, out)
 		delete(c.sessions, sessionID)
+	case *protocol.AgentTurnCompletedNotification:
+		out = c.prompts.failHandoff(sessionID, errNoHandoffSession, out)
+	case nil:
+		if p.Notification.Type == notificationSpecHandoffSessionCreated {
+			c.onSpecHandoffCreated(sessionID, p.Notification.Raw)
+		}
 	case *protocol.DroidWorkingStateChangedNotification:
 		if v.NewState != protocol.DroidWorkingStateWaitingForToolConfirmation {
 			out = c.prompts.clearStale(sessionID, out)
