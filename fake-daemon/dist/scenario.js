@@ -250,11 +250,14 @@ export function createScenario(input) {
         },
         'daemon.initialize_session': (params) => {
             const title = typeof params['title'] === 'string' ? params['title'] : 'New session';
+            // Like the real Daemon, the Session starts in the mode asked for (Spec, say).
+            const mode = Object.fromEntries(['interactionMode', 'autonomyLevel'].flatMap((key) => typeof params[key] === 'string' ? [[key, params[key]]] : []));
             const created = session(title, String(params['cwd']), [], {
                 ...(typeof params['sessionId'] === 'string' ? { sessionId: params['sessionId'] } : {}),
                 ...(Array.isArray(params['tags'])
                     ? { tags: params['tags'] }
                     : {}),
+                ...(Object.keys(mode).length > 0 ? { settings: mode } : {}),
             });
             created.unwritten = true;
             const repo = input.gitRepos?.[created.cwd];
@@ -283,6 +286,7 @@ export function createScenario(input) {
                 // Like the real Daemon, a mode asked for here is the Session's for good.
                 settings: {
                     ...sessionSettings(),
+                    ...mode,
                     ...(typeof params['toolExecutionMode'] === 'string'
                         ? { toolExecutionMode: params['toolExecutionMode'] }
                         : {}),

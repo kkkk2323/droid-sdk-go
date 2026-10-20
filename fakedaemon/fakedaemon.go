@@ -51,8 +51,14 @@ type Message struct {
 
 // Turn is how the agent answers daemon.add_user_message: Kind is "reply"
 // (Deltas streamed), "permission" (asks to run Command, then Reply),
-// "askUser" (Question with Options), "todo", or "structured" (a Memory
-// Session's turn, ending with Structured as its structured output).
+// "askUser" (Question with Options), "todo", "structured" (a Memory
+// Session's turn, ending with Structured as its structured output), or
+// "spec" (in a Session in Spec mode, presents Plan titled Title with
+// ExitSpecMode and acts on the answer as droid 0.244 does, streaming Reply
+// once approved; elsewhere, such as in the Session a spec handoff creates,
+// only streams Reply). A Session starts in Spec mode with Extra
+// {"settings": {"interactionMode": "spec"}}, or initialize_session's
+// interactionMode.
 type Turn struct {
 	Kind        string         `json:"kind"`
 	Deltas      []string       `json:"deltas,omitempty"`
@@ -65,6 +71,8 @@ type Turn struct {
 	MultiSelect bool           `json:"multiSelect,omitempty"`
 	Todos       []Todo         `json:"todos,omitempty"`
 	Structured  map[string]any `json:"structured,omitempty"`
+	Plan        string         `json:"plan,omitempty"`
+	Title       string         `json:"title,omitempty"`
 }
 
 // Todo is an item of a todo turn's list.

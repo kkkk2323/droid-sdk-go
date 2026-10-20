@@ -11,6 +11,7 @@ import {
   askUserTurn,
   todoTurn,
   structuredTurn,
+  specTurn,
   interruptHandler,
   resolveQueuedHandler,
   withQueue,
@@ -37,6 +38,7 @@ type TurnSpec =
       reply: string
     }
   | { kind: 'structured'; structured: Record<string, unknown> }
+  | { kind: 'spec'; plan: string; title?: string; reply: string }
 type Spec = {
   sessions?: SessionSpec[]
   turn?: TurnSpec
@@ -60,6 +62,8 @@ function turnHandler(turn: TurnSpec | undefined) {
       return todoTurn(turn)
     case 'structured':
       return structuredTurn(() => turn.structured)
+    case 'spec':
+      return specTurn(turn)
   }
 }
 

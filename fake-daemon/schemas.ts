@@ -130,17 +130,35 @@ const SessionInactivityParams = z.object({
   }),
 })
 
-function either(first: ZodLike, second: ZodLike): ZodLike {
+// Newer than the SDK's schemas: droid 0.244 sends it when the Client starts a
+// spec handoff's Session.
+const SpecHandoffSessionCreatedParams = z.object({
+  sessionId: z.string(),
+  notification: z.object({
+    type: z.literal('spec_handoff_session_created'),
+    newSessionId: z.string(),
+    initialPrompt: z.string(),
+    specHandoffId: z.string().optional(),
+    timestamp: z.number(),
+  }),
+})
+
+function either(first: ZodLike, ...rest: ZodLike[]): ZodLike {
   return {
     safeParse(value) {
       const result = first.safeParse(value)
-      return result.success ? result : second.safeParse(value)
+      const [next, ...others] = rest
+      return result.success || !next ? result : either(next, ...others).safeParse(value)
     },
   }
 }
 
 const NOTIFICATION_SCHEMAS: Record<string, ZodLike> = {
-  'daemon.session_notification': either(SessionNotificationParamsSchema, SessionInactivityParams),
+  'daemon.session_notification': either(
+    SessionNotificationParamsSchema,
+    SessionInactivityParams,
+    SpecHandoffSessionCreatedParams,
+  ),
   'daemon.connection_status': ConnectionStatusParams,
   'daemon.session.archive_state_changed': z.object({
     sessionId: z.string(),

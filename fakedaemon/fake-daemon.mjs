@@ -38167,16 +38167,31 @@ var SessionInactivityParams = external_exports2.object({
     timeoutSeconds: external_exports2.number()
   })
 });
-function either(first, second) {
+var SpecHandoffSessionCreatedParams = external_exports2.object({
+  sessionId: external_exports2.string(),
+  notification: external_exports2.object({
+    type: external_exports2.literal("spec_handoff_session_created"),
+    newSessionId: external_exports2.string(),
+    initialPrompt: external_exports2.string(),
+    specHandoffId: external_exports2.string().optional(),
+    timestamp: external_exports2.number()
+  })
+});
+function either(first, ...rest) {
   return {
     safeParse(value) {
       const result = first.safeParse(value);
-      return result.success ? result : second.safeParse(value);
+      const [next, ...others] = rest;
+      return result.success || !next ? result : either(next, ...others).safeParse(value);
     }
   };
 }
 var NOTIFICATION_SCHEMAS = {
-  "daemon.session_notification": either(SessionNotificationParamsSchema2, SessionInactivityParams),
+  "daemon.session_notification": either(
+    SessionNotificationParamsSchema2,
+    SessionInactivityParams,
+    SpecHandoffSessionCreatedParams
+  ),
   "daemon.connection_status": ConnectionStatusParams,
   "daemon.session.archive_state_changed": external_exports2.object({
     sessionId: external_exports2.string(),
@@ -38888,9 +38903,15 @@ function createScenario(input2) {
     },
     "daemon.initialize_session": (params) => {
       const title = typeof params["title"] === "string" ? params["title"] : "New session";
+      const mode = Object.fromEntries(
+        ["interactionMode", "autonomyLevel"].flatMap(
+          (key) => typeof params[key] === "string" ? [[key, params[key]]] : []
+        )
+      );
       const created = session(title, String(params["cwd"]), [], {
         ...typeof params["sessionId"] === "string" ? { sessionId: params["sessionId"] } : {},
-        ...Array.isArray(params["tags"]) ? { tags: params["tags"] } : {}
+        ...Array.isArray(params["tags"]) ? { tags: params["tags"] } : {},
+        ...Object.keys(mode).length > 0 ? { settings: mode } : {}
       });
       created.unwritten = true;
       const repo = input2.gitRepos?.[created.cwd];
@@ -38915,6 +38936,7 @@ function createScenario(input2) {
         // Like the real Daemon, a mode asked for here is the Session's for good.
         settings: {
           ...sessionSettings(),
+          ...mode,
           ...typeof params["toolExecutionMode"] === "string" ? { toolExecutionMode: params["toolExecutionMode"] } : {}
         },
         availableModels: models
@@ -39774,7 +39796,7 @@ function finishTurn(daemon2, sessionId, turnId, reason) {
     lastCallTokenUsage: LAST_CALL_TOKEN_USAGE
   });
   daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "idle" });
-  if (reason === "completed") drainHeld(sessionId);
+  if (reason === "completed" || reason === "spec_handoff") drainHeld(sessionId);
   else heldMessages.delete(sessionId);
 }
 function permissionTurn(options) {
@@ -40037,6 +40059,215 @@ function structuredTurn(reply) {
     return {};
   };
 }
+var SPEC_OPTIONS = [
+  { label: "Proceed with implementation", value: "proceed_once" },
+  {
+    label: "Proceed, and allow file edits and read-only commands (Low)",
+    value: "proceed_auto_run_low"
+  },
+  { label: "Proceed, and allow reversible commands (Medium)", value: "proceed_auto_run_medium" },
+  { label: "Proceed, and allow all commands (High)", value: "proceed_auto_run_high" },
+  { label: "Proceed in a new session (no autonomy)", value: "proceed_new_session" },
+  { label: "Proceed in a new session (Low autonomy)", value: "proceed_new_session_low" },
+  { label: "Proceed in a new session (Medium autonomy)", value: "proceed_new_session_medium" },
+  { label: "Proceed in a new session (High autonomy)", value: "proceed_new_session_high" },
+  { label: "No, keep iterating on spec", value: "cancel" }
+];
+var AUTONOMY_MODES = {
+  off: "normal",
+  low: "auto-low",
+  medium: "auto-medium",
+  high: "auto-high"
+};
+function autonomyOf(option) {
+  return /_(low|medium|high)$/.exec(option)?.[1] ?? "off";
+}
+function specTurn(options) {
+  return (params, context, request) => {
+    const sessionId = String(params["sessionId"]);
+    const daemon2 = context.daemon;
+    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID5();
+    const found = daemon2.scenario.sessions.find((s) => s.sessionId === sessionId);
+    const settings = () => ({ ...sessionSettings(), ...found?.settings });
+    void (async () => {
+      startTurn(daemon2, sessionId, userMessageId, String(params["text"]), String(request.id));
+      if (settings()["interactionMode"] !== "spec") {
+        await streamText(daemon2, sessionId, options.reply);
+        finishTurn(daemon2, sessionId, userMessageId, "completed");
+        return;
+      }
+      const toolUseId = `call_${randomUUID5().slice(0, 8)}`;
+      const title = options.title ?? "Plan";
+      const toolUse = {
+        type: "tool_use",
+        id: toolUseId,
+        name: "ExitSpecMode",
+        input: { plan: options.plan, title }
+      };
+      daemon2.notify(sessionId, { type: "tool_call", toolUse });
+      const committed = Date.now();
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: {
+          id: randomUUID5(),
+          role: "assistant",
+          content: [toolUse],
+          createdAt: committed,
+          updatedAt: committed
+        },
+        parentId: userMessageId
+      });
+      daemon2.notify(sessionId, {
+        type: "droid_working_state_changed",
+        newState: "waiting_for_tool_confirmation"
+      });
+      const { id, answer } = daemon2.request("daemon.request_permission", {
+        sessionId,
+        toolUses: [
+          {
+            toolUse,
+            confirmationType: "exit_spec_mode",
+            details: {
+              type: "exit_spec_mode",
+              plan: options.plan,
+              title,
+              contextSavingsPercent: 1,
+              supportsClientStartedHandoff: true
+            }
+          }
+        ],
+        options: SPEC_OPTIONS
+      });
+      const result = (await answer)["result"] ?? {};
+      const offered = SPEC_OPTIONS.some((o) => o.value === result["selectedOption"]);
+      const selectedOption = offered ? String(result["selectedOption"]) : "cancel";
+      const toolResult = (content, isError) => daemon2.notify(sessionId, {
+        type: "tool_result",
+        toolUseId,
+        content,
+        isError,
+        messageId: randomUUID5()
+      });
+      if (selectedOption === "cancel") {
+        daemon2.notify(sessionId, {
+          type: "permission_resolved",
+          requestId: id,
+          toolUseIds: [],
+          selectedOption
+        });
+        toolResult(
+          "Error: Plan not approved - remaining in Spec Mode. Provide feedback to refine the spec.",
+          true
+        );
+        finishTurn(daemon2, sessionId, userMessageId, "completed");
+        return;
+      }
+      daemon2.notify(sessionId, {
+        type: "droid_working_state_changed",
+        newState: "executing_tool"
+      });
+      daemon2.notify(sessionId, {
+        type: "permission_resolved",
+        requestId: id,
+        toolUseIds: [toolUseId],
+        selectedOption
+      });
+      const level = autonomyOf(selectedOption);
+      const newSession = selectedOption.startsWith("proceed_new_session");
+      const leaveSpec = (autonomyLevel) => {
+        if (found) {
+          found.settings = {
+            ...settings(),
+            interactionMode: "auto",
+            autonomyLevel,
+            autonomyMode: AUTONOMY_MODES[autonomyLevel]
+          };
+        }
+        daemon2.notify(sessionId, { type: "settings_updated", settings: settings() });
+      };
+      leaveSpec(newSession ? "off" : level);
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const filePath = `/Users/test/.factory/specs/${slug}.md`;
+      if (!newSession) {
+        const comment = typeof result["comment"] === "string" ? result["comment"] : "";
+        toolResult(
+          JSON.stringify({
+            approved: true,
+            message: comment ? `Specification was approved but the user has left a required comment to address in the plan. Continue with the implementation.
+
+User comment: ${comment}` : "Spec mode exited. The user approved the plan. Continue with the implementation.",
+            filePath,
+            ...comment ? { userComment: comment } : {},
+            isEdited: false
+          }),
+          false
+        );
+        await streamText(daemon2, sessionId, options.reply);
+        finishTurn(daemon2, sessionId, userMessageId, "completed");
+        return;
+      }
+      toolResult(
+        JSON.stringify({
+          approved: true,
+          message: "Specification has been approved and saved. Start implementation in a new session.",
+          filePath,
+          handoff: { plan: options.plan, isNewSession: true },
+          isEdited: false
+        }),
+        false
+      );
+      const initialPrompt = `Implement the following plan:
+
+${options.plan}
+
+
+If you need specific details from the planning session (like exact code snippets, error messages, or content generated), read the full transcript at: ` + String(daemon2.sessionFile(sessionId));
+      if (result["clientStartsHandoffSession"] === true) {
+        const created = session("New Session", found?.cwd ?? "/", [], {
+          settings: {
+            interactionMode: "auto",
+            autonomyLevel: level,
+            autonomyMode: AUTONOMY_MODES[level]
+          },
+          inactive: true,
+          unwritten: true
+        });
+        daemon2.scenario.sessions.unshift(created);
+        daemon2.notify(sessionId, {
+          type: "spec_handoff_session_created",
+          newSessionId: created.sessionId,
+          initialPrompt,
+          ...typeof result["specHandoffId"] === "string" ? { specHandoffId: result["specHandoffId"] } : {},
+          timestamp: Date.now()
+        });
+        finishTurn(daemon2, sessionId, userMessageId, "spec_handoff");
+        return;
+      }
+      leaveSpec(level);
+      const implementId = randomUUID5();
+      const now = Date.now();
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: {
+          id: implementId,
+          role: "user",
+          content: [{ type: "text", text: initialPrompt }],
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+      await streamText(daemon2, sessionId, options.reply);
+      daemon2.notify(sessionId, {
+        type: "agent_turn_completed",
+        reason: "completed",
+        turnId: implementId,
+        tokenUsage: emptyTokenUsage()
+      });
+      finishTurn(daemon2, sessionId, userMessageId, "spec_handoff");
+    })();
+    return {};
+  };
+}
 
 // fakedaemon/serve.ts
 var spec = JSON.parse(process.env["DROID_FAKE_SCENARIO"] ?? "{}");
@@ -40054,6 +40285,8 @@ function turnHandler(turn) {
       return todoTurn(turn);
     case "structured":
       return structuredTurn(() => turn.structured);
+    case "spec":
+      return specTurn(turn);
   }
 }
 var handler = turnHandler(spec.turn);

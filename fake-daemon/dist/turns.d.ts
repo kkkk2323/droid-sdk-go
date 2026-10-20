@@ -86,3 +86,19 @@ export interface ScriptTurnOptions {
  * user-only message tagged with the run, as droid 0.231 sends them.
  */
 export declare function scriptTurn(options: ScriptTurnOptions): MethodHandler;
+export interface SpecTurnOptions {
+    plan: string;
+    title?: string;
+    /** Reply streamed once the plan is approved, and in a Session not in Spec mode. */
+    reply: string;
+}
+/**
+ * Handler for `daemon.add_user_message` in a Session in Spec mode: the agent
+ * presents the plan with ExitSpecMode and asks for approval, then acts on the
+ * answer as droid 0.244 does: stays in Spec mode on `cancel`, leaves it and
+ * implements (streams the reply) on `proceed_once` and `proceed_auto_run_*`,
+ * and on `proceed_new_session*` creates the implementing Session, which the
+ * Client starts when it answered with `clientStartsHandoffSession`. In a
+ * Session not in Spec mode, such as that new one, it only streams the reply.
+ */
+export declare function specTurn(options: SpecTurnOptions): MethodHandler;

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import type { FakeDaemon } from './fake-daemon.js'
 import type { JsonRpcRequest } from './protocol.js'
 import type { HandlerContext, MethodHandler } from './scenario.js'
-import { emptyTokenUsage } from './scenario.js'
+import { emptyTokenUsage, session, sessionSettings } from './scenario.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -225,7 +225,7 @@ function finishTurn(
   daemon: FakeDaemon,
   sessionId: string,
   turnId: string,
-  reason: 'completed' | 'cancelled' | 'permission_rejected',
+  reason: 'completed' | 'cancelled' | 'permission_rejected' | 'spec_handoff',
 ): void {
   activeTurns.delete(sessionId)
   daemon.notify(sessionId, {
@@ -242,7 +242,7 @@ function finishTurn(
     lastCallTokenUsage: LAST_CALL_TOKEN_USAGE,
   })
   daemon.notify(sessionId, { type: 'droid_working_state_changed', newState: 'idle' })
-  if (reason === 'completed') drainHeld(sessionId)
+  if (reason === 'completed' || reason === 'spec_handoff') drainHeld(sessionId)
   else heldMessages.delete(sessionId)
 }
 
@@ -718,6 +718,242 @@ export function scriptTurn(options: ScriptTurnOptions): MethodHandler {
       })
       await streamText(daemon, sessionId, options.reply)
       finishTurn(daemon, sessionId, userMessageId, 'completed')
+    })()
+    return {}
+  }
+}
+
+export interface SpecTurnOptions {
+  plan: string
+  title?: string
+  /** Reply streamed once the plan is approved, and in a Session not in Spec mode. */
+  reply: string
+}
+
+const SPEC_OPTIONS = [
+  { label: 'Proceed with implementation', value: 'proceed_once' },
+  {
+    label: 'Proceed, and allow file edits and read-only commands (Low)',
+    value: 'proceed_auto_run_low',
+  },
+  { label: 'Proceed, and allow reversible commands (Medium)', value: 'proceed_auto_run_medium' },
+  { label: 'Proceed, and allow all commands (High)', value: 'proceed_auto_run_high' },
+  { label: 'Proceed in a new session (no autonomy)', value: 'proceed_new_session' },
+  { label: 'Proceed in a new session (Low autonomy)', value: 'proceed_new_session_low' },
+  { label: 'Proceed in a new session (Medium autonomy)', value: 'proceed_new_session_medium' },
+  { label: 'Proceed in a new session (High autonomy)', value: 'proceed_new_session_high' },
+  { label: 'No, keep iterating on spec', value: 'cancel' },
+]
+
+const AUTONOMY_MODES: Record<string, string> = {
+  off: 'normal',
+  low: 'auto-low',
+  medium: 'auto-medium',
+  high: 'auto-high',
+}
+
+/** The autonomy level a proceed option leaves, as droid 0.244 sets it. */
+function autonomyOf(option: string): string {
+  return /_(low|medium|high)$/.exec(option)?.[1] ?? 'off'
+}
+
+/**
+ * Handler for `daemon.add_user_message` in a Session in Spec mode: the agent
+ * presents the plan with ExitSpecMode and asks for approval, then acts on the
+ * answer as droid 0.244 does: stays in Spec mode on `cancel`, leaves it and
+ * implements (streams the reply) on `proceed_once` and `proceed_auto_run_*`,
+ * and on `proceed_new_session*` creates the implementing Session, which the
+ * Client starts when it answered with `clientStartsHandoffSession`. In a
+ * Session not in Spec mode, such as that new one, it only streams the reply.
+ */
+export function specTurn(options: SpecTurnOptions): MethodHandler {
+  return (params, context, request) => {
+    const sessionId = String(params['sessionId'])
+    const daemon = context.daemon
+    const userMessageId =
+      typeof params['messageId'] === 'string' ? params['messageId'] : randomUUID()
+    const found = daemon.scenario.sessions.find((s) => s.sessionId === sessionId)
+    const settings = () => ({ ...sessionSettings(), ...found?.settings })
+    void (async () => {
+      startTurn(daemon, sessionId, userMessageId, String(params['text']), String(request.id))
+      if (settings()['interactionMode'] !== 'spec') {
+        await streamText(daemon, sessionId, options.reply)
+        finishTurn(daemon, sessionId, userMessageId, 'completed')
+        return
+      }
+      const toolUseId = `call_${randomUUID().slice(0, 8)}`
+      const title = options.title ?? 'Plan'
+      const toolUse = {
+        type: 'tool_use',
+        id: toolUseId,
+        name: 'ExitSpecMode',
+        input: { plan: options.plan, title },
+      }
+      daemon.notify(sessionId, { type: 'tool_call', toolUse })
+      const committed = Date.now()
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: {
+          id: randomUUID(),
+          role: 'assistant',
+          content: [toolUse],
+          createdAt: committed,
+          updatedAt: committed,
+        },
+        parentId: userMessageId,
+      })
+      daemon.notify(sessionId, {
+        type: 'droid_working_state_changed',
+        newState: 'waiting_for_tool_confirmation',
+      })
+      const { id, answer } = daemon.request('daemon.request_permission', {
+        sessionId,
+        toolUses: [
+          {
+            toolUse,
+            confirmationType: 'exit_spec_mode',
+            details: {
+              type: 'exit_spec_mode',
+              plan: options.plan,
+              title,
+              contextSavingsPercent: 1,
+              supportsClientStartedHandoff: true,
+            },
+          },
+        ],
+        options: SPEC_OPTIONS,
+      })
+      const result = ((await answer)['result'] ?? {}) as Record<string, unknown>
+      const offered = SPEC_OPTIONS.some((o) => o.value === result['selectedOption'])
+      const selectedOption = offered ? String(result['selectedOption']) : 'cancel'
+      const toolResult = (content: string, isError: boolean) =>
+        daemon.notify(sessionId, {
+          type: 'tool_result',
+          toolUseId,
+          content,
+          isError,
+          messageId: randomUUID(),
+        })
+      if (selectedOption === 'cancel') {
+        daemon.notify(sessionId, {
+          type: 'permission_resolved',
+          requestId: id,
+          toolUseIds: [],
+          selectedOption,
+        })
+        toolResult(
+          'Error: Plan not approved - remaining in Spec Mode. Provide feedback to refine the spec.',
+          true,
+        )
+        finishTurn(daemon, sessionId, userMessageId, 'completed')
+        return
+      }
+      daemon.notify(sessionId, {
+        type: 'droid_working_state_changed',
+        newState: 'executing_tool',
+      })
+      daemon.notify(sessionId, {
+        type: 'permission_resolved',
+        requestId: id,
+        toolUseIds: [toolUseId],
+        selectedOption,
+      })
+      const level = autonomyOf(selectedOption)
+      const newSession = selectedOption.startsWith('proceed_new_session')
+      const leaveSpec = (autonomyLevel: string) => {
+        if (found) {
+          found.settings = {
+            ...settings(),
+            interactionMode: 'auto',
+            autonomyLevel,
+            autonomyMode: AUTONOMY_MODES[autonomyLevel],
+          }
+        }
+        daemon.notify(sessionId, { type: 'settings_updated', settings: settings() })
+      }
+      leaveSpec(newSession ? 'off' : level)
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      const filePath = `/Users/test/.factory/specs/${slug}.md`
+      if (!newSession) {
+        const comment = typeof result['comment'] === 'string' ? result['comment'] : ''
+        toolResult(
+          JSON.stringify({
+            approved: true,
+            message: comment
+              ? `Specification was approved but the user has left a required comment to address in the plan. Continue with the implementation.\n\nUser comment: ${comment}`
+              : 'Spec mode exited. The user approved the plan. Continue with the implementation.',
+            filePath,
+            ...(comment ? { userComment: comment } : {}),
+            isEdited: false,
+          }),
+          false,
+        )
+        await streamText(daemon, sessionId, options.reply)
+        finishTurn(daemon, sessionId, userMessageId, 'completed')
+        return
+      }
+      toolResult(
+        JSON.stringify({
+          approved: true,
+          message:
+            'Specification has been approved and saved. Start implementation in a new session.',
+          filePath,
+          handoff: { plan: options.plan, isNewSession: true },
+          isEdited: false,
+        }),
+        false,
+      )
+      const initialPrompt =
+        `Implement the following plan:\n\n${options.plan}\n\n\n` +
+        'If you need specific details from the planning session (like exact code snippets, ' +
+        'error messages, or content generated), read the full transcript at: ' +
+        String(daemon.sessionFile(sessionId))
+      if (result['clientStartsHandoffSession'] === true) {
+        const created = session('New Session', found?.cwd ?? '/', [], {
+          settings: {
+            interactionMode: 'auto',
+            autonomyLevel: level,
+            autonomyMode: AUTONOMY_MODES[level],
+          },
+          inactive: true,
+          unwritten: true,
+        })
+        daemon.scenario.sessions.unshift(created)
+        daemon.notify(sessionId, {
+          type: 'spec_handoff_session_created',
+          newSessionId: created.sessionId,
+          initialPrompt,
+          ...(typeof result['specHandoffId'] === 'string'
+            ? { specHandoffId: result['specHandoffId'] }
+            : {}),
+          timestamp: Date.now(),
+        })
+        finishTurn(daemon, sessionId, userMessageId, 'spec_handoff')
+        return
+      }
+      // Without a Client to start it, the Daemon implements in this Session,
+      // as a turn of its own inside this one.
+      leaveSpec(level)
+      const implementId = randomUUID()
+      const now = Date.now()
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: {
+          id: implementId,
+          role: 'user',
+          content: [{ type: 'text', text: initialPrompt }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      })
+      await streamText(daemon, sessionId, options.reply)
+      daemon.notify(sessionId, {
+        type: 'agent_turn_completed',
+        reason: 'completed',
+        turnId: implementId,
+        tokenUsage: emptyTokenUsage(),
+      })
+      finishTurn(daemon, sessionId, userMessageId, 'spec_handoff')
     })()
     return {}
   }
