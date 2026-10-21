@@ -47,6 +47,8 @@ type Spec = {
 }
 
 const spec: Spec = JSON.parse(process.env['DROID_FAKE_SCENARIO'] ?? '{}')
+// The Droi release /meta answers, for Clients that compare it with their own.
+if (process.env['DROID_FAKE_APP_VERSION']) FakeDaemon.appVersion = process.env['DROID_FAKE_APP_VERSION']
 
 function turnHandler(turn: TurnSpec | undefined) {
   switch (turn?.kind) {

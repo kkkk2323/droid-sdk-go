@@ -40271,6 +40271,7 @@ If you need specific details from the planning session (like exact code snippets
 
 // fakedaemon/serve.ts
 var spec = JSON.parse(process.env["DROID_FAKE_SCENARIO"] ?? "{}");
+if (process.env["DROID_FAKE_APP_VERSION"]) FakeDaemon.appVersion = process.env["DROID_FAKE_APP_VERSION"];
 function turnHandler(turn) {
   switch (turn?.kind) {
     case void 0:
