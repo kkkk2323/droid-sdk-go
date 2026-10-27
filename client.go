@@ -56,7 +56,8 @@ type Options struct {
 	Record func(dir Direction, frame []byte)
 	// BeforeCall, when set, runs before every request with its method and
 	// the sessionId of its params ("" when it has none); an error fails the
-	// request.
+	// request. Its ctx has the request's deadline but not its id or
+	// response hook, which a call it makes must not take.
 	BeforeCall func(ctx context.Context, method, sessionID string) error
 	Logger     *slog.Logger
 }
@@ -250,7 +251,7 @@ func (c *Client) Call(ctx context.Context, method string, params, result any) er
 		req["params"] = params
 	}
 	if c.opts.BeforeCall != nil {
-		if err := c.opts.BeforeCall(ctx, method, sessionIDOf(params)); err != nil {
+		if err := c.opts.BeforeCall(withoutRequest{ctx}, method, sessionIDOf(params)); err != nil {
 			return err
 		}
 	}
@@ -319,6 +320,18 @@ func (c *Client) Call(ctx context.Context, method string, params, result any) er
 }
 
 type responseHookKey struct{}
+
+// withoutRequest is a Call's context for the calls its BeforeCall makes:
+// the request id and response hook belong to that one request.
+type withoutRequest struct{ context.Context }
+
+func (c withoutRequest) Value(key any) any {
+	switch key.(type) {
+	case responseHookKey, requestIDKey:
+		return nil
+	}
+	return c.Context.Value(key)
+}
 
 // WithResponseHook makes Call run fn with the result of the request it sends
 // with ctx, on the read goroutine, as the response arrives and before any

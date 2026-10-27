@@ -13,6 +13,7 @@ import (
 	"github.com/kkkk2323/droid-sdk-go/controller"
 	"github.com/kkkk2323/droid-sdk-go/fakedaemon"
 	"github.com/kkkk2323/droid-sdk-go/protocol"
+	"github.com/kkkk2323/droid-sdk-go/session"
 )
 
 // recorder keeps a Controller's events for a test to wait on.
@@ -268,6 +269,70 @@ func TestACallLoadsASessionTheDaemonCleanedUp(t *testing.T) {
 		t.Fatalf("the Session was not loaded again: %v", err)
 	}
 	r.wait(t, next, "turn end", turnEnded)
+}
+
+// The load before a call to a Session the Daemon cleaned up is a request
+// of its own: the call's request id and response hook stay with the call.
+// Its hook used to run on the load's result, so an idle Session showed a
+// turn that started and ended before the message went out.
+func TestTheLoadBeforeACallKeepsNoneOfTheCallsRequest(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+		Turn:     &fakedaemon.Turn{Kind: "reply", Deltas: []string{"awake"}},
+	})
+	var mu sync.Mutex
+	ids := map[string][]string{}
+	c, r := start(t, d, controller.Config{Record: func(dir droid.Direction, frame []byte) {
+		var f struct {
+			ID     string `json:"id"`
+			Method string `json:"method"`
+		}
+		if dir == droid.Sent && json.Unmarshal(frame, &f) == nil && f.Method != "" {
+			mu.Lock()
+			ids[f.Method] = append(ids[f.Method], f.ID)
+			mu.Unlock()
+		}
+	}})
+	ctx := context.Background()
+	id := d.Sessions[0].SessionID
+	if _, err := c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Notify(id, map[string]any{"type": "session_inactivity", "message": "Session cleaned up after inactivity", "timestamp": 1, "timeoutSeconds": 1800}); err != nil {
+		t.Fatal(err)
+	}
+	_, next := r.wait(t, 0, "the inactivity", func(e controller.Event) bool {
+		n, ok := e.(controller.SessionNotification)
+		if !ok {
+			return false
+		}
+		_, ok = n.Value.(*protocol.SessionInactivityNotification)
+		return ok
+	})
+	store := c.Store()
+	var whileLoading []protocol.DroidWorkingState
+	store.Subscribe(func(e session.Event) {
+		if e.Kind == session.EventWorkingStateChanged && e.SessionID == id && store.LoadState(id) != session.Loaded {
+			mu.Lock()
+			whileLoading = append(whileLoading, store.Session(id).WorkingState())
+			mu.Unlock()
+		}
+	})
+	if _, err := c.AddUserMessage(droid.WithRequestID(ctx, "the-message"), protocol.AddUserMessageParams{SessionID: id, Text: "Still there?"}); err != nil {
+		t.Fatal(err)
+	}
+	r.wait(t, next, "turn end", turnEnded)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(whileLoading) > 0 {
+		t.Errorf("working states while the Session loaded again: %v", whileLoading)
+	}
+	if loads := ids[protocol.MethodLoadSession]; len(loads) != 2 || loads[1] == "the-message" {
+		t.Errorf("load_session ids %v", loads)
+	}
+	if sent := ids[protocol.MethodAddUserMessage]; len(sent) != 1 || sent[0] != "the-message" {
+		t.Errorf("add_user_message ids %v", sent)
+	}
 }
 
 // A Session's own MCP servers, such as a loopback one serving in-process
