@@ -16,6 +16,7 @@ import {
   interruptHandler,
   resolveQueuedHandler,
   withQueue,
+  withTurnState,
 } from '../fake-daemon/turns.js'
 
 type MessageSpec = {
@@ -94,6 +95,10 @@ const daemon = await FakeDaemon.start({
   },
   validDirectories: spec.validDirectories,
 })
+daemon.scenario.on(
+  'daemon.load_session',
+  withTurnState(daemon.scenario.handlers['daemon.load_session']!),
+)
 
 const wsUrl =
   daemon.url.replace(/^http/, 'ws') + '/daemon?token=' + encodeURIComponent(daemon.token)

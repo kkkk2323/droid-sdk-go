@@ -32,6 +32,15 @@ export declare const LAST_CALL_TOKEN_USAGE: {
  * then `end_of_loop` ones.
  */
 export declare function withQueue(handler: MethodHandler): MethodHandler;
+/**
+ * What daemon.load_session reports of a Session's scripted turn, as the real
+ * Daemon does: whether the agent loop runs, the messages it holds for after
+ * the turn (queuedMessages), and the requests it admitted
+ * (pendingMessageRequestIds: the running turn's and the held ones).
+ */
+export declare function turnLoadState(sessionId: string): Record<string, unknown>;
+/** Wraps a `daemon.load_session` handler so that its result reports {@link turnLoadState}. */
+export declare function withTurnState(load: MethodHandler): MethodHandler;
 /** Handler for `daemon.resolve_queued_user_message`: only `delete` is scripted. */
 export declare const resolveQueuedHandler: MethodHandler;
 /**

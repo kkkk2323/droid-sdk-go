@@ -63,6 +63,39 @@ export function withQueue(handler) {
         return {};
     };
 }
+/**
+ * What daemon.load_session reports of a Session's scripted turn, as the real
+ * Daemon does: whether the agent loop runs, the messages it holds for after
+ * the turn (queuedMessages), and the requests it admitted
+ * (pendingMessageRequestIds: the running turn's and the held ones).
+ */
+export function turnLoadState(sessionId) {
+    const turn = activeTurns.get(sessionId);
+    const held = heldMessages.get(sessionId) ?? [];
+    return {
+        ...(turn ? { isAgentLoopInProgress: true, workingState: 'streaming_assistant_message' } : {}),
+        ...(held.length > 0
+            ? {
+                queuedMessages: held.map((m) => ({
+                    requestId: String(m.request.id),
+                    text: String(m.params['text'] ?? ''),
+                    queuePlacement: m.placement,
+                })),
+            }
+            : {}),
+        pendingMessageRequestIds: [
+            ...(turn?.requestId ? [turn.requestId] : []),
+            ...held.map((m) => String(m.request.id)),
+        ],
+    };
+}
+/** Wraps a `daemon.load_session` handler so that its result reports {@link turnLoadState}. */
+export function withTurnState(load) {
+    return async (params, context, request) => ({
+        ...(await load(params, context, request)),
+        ...turnLoadState(String(params['sessionId'])),
+    });
+}
 /** Handler for `daemon.resolve_queued_user_message`: only `delete` is scripted. */
 export const resolveQueuedHandler = (params) => {
     const sessionId = String(params['sessionId']);
@@ -106,6 +139,7 @@ async function runTurn(input) {
     const turn = {
         sessionId,
         turnId: userMessageId,
+        requestId,
         cancelled: false,
         cancel() {
             this.cancelled = true;

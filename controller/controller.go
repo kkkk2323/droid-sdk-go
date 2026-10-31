@@ -329,7 +329,8 @@ func (c *Controller) watch(gen int, cl *droid.Client) {
 	c.prompts.markPromptSessionsInactive()
 	c.mu.Unlock()
 	c.store.MarkAllNotLoaded()
-	c.store.ClearAllQueues()
+	// Queued messages stay shown; the reload's queue decides on them.
+	c.store.MarkQueuesTransportInterrupted()
 	c.log.Info("droid: connection lost", "err", cl.Err())
 	c.events.push(StatusChanged{Status: st})
 	if st.Reconnecting {

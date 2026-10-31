@@ -148,9 +148,14 @@ func TestQueueReconciliationOnLoad(t *testing.T) {
 	if p := ResubmitParams(out.Resubmit[0]); p.Text != "lost" || p.QueuePlacement != protocol.QueuePlacementEndOfTurn || p.Content != nil {
 		t.Fatalf("resubmit params %+v", p)
 	}
+	// The resent message stays queued until its create_message comes.
 	qs := sess.QueuedMessages()
-	if len(qs) != 2 || qs[0].RequestID != "l1" || qs[1].RequestID != "d3" || qs[1].Kind != KindDaemonQueuedEndOfLoop || textOf(protocol.FactoryDroidMessage{Content: qs[1].Content}) != "held" {
+	if len(qs) != 3 || qs[0].RequestID != "l1" || qs[1].RequestID != "d3" || qs[1].Kind != KindDaemonQueuedEndOfLoop || textOf(protocol.FactoryDroidMessage{Content: qs[1].Content}) != "held" || qs[2].RequestID != "d1" {
 		t.Fatalf("queue after load %+v", qs)
+	}
+	send(t, s, id, created(msg("u10", roleUser, "lost", float64(now.UnixMilli()+20), ""), "d1"))
+	if _, ok := sess.QueuedMessage("d1"); ok {
+		t.Fatal("the resent message stayed queued after its create_message")
 	}
 
 	// While the agent loop runs, a message the Daemon no longer lists may
@@ -163,6 +168,149 @@ func TestQueueReconciliationOnLoad(t *testing.T) {
 	}
 	if got := kindsOf(sess.QueuedMessages()); got["d4"] != KindDaemonQueuedDiscardable {
 		t.Fatalf("draining message dropped: %v", got)
+	}
+}
+
+// A message queued when the connection dropped may have been taken or
+// dropped by the Daemon meanwhile: the reload's pendingMessageRequestIds
+// decide, and it is never sent again.
+func TestQueueAfterATransportDrop(t *testing.T) {
+	s, clk := newTestStore()
+	const id = "s1"
+	loadWith(t, s, id, protocol.LoadSessionResult{})
+	sess := s.Session(id)
+	now := clk.now()
+	sess.QueueUserMessages(
+		queued("took", "taken by the Daemon", KindDaemonQueuedDiscardable, now),
+		queued("dropped", "dropped by the Daemon", KindDaemonQueuedDiscardable, now),
+		queued("l1", "paused", KindLocalPausedAfterEsc, now),
+	)
+	s.MarkQueuesTransportInterrupted()
+	if len(sess.QueuedMessages()) != 3 {
+		t.Fatal("a dropped connection must keep the queue shown")
+	}
+	clk.add(time.Second)
+	sess.QueueUserMessages(queued("after", "queued after the drop", KindDaemonQueuedDiscardable, clk.now()))
+	out := loadWith(t, s, id, protocol.LoadSessionResult{
+		PendingMessageRequestIDs: []string{"took"},
+		QueuedMessages: []protocol.LoadSessionResultQueuedMessagesItem{
+			{RequestID: "peer", Text: "a peer Session's", Sender: &protocol.MessageSender{}},
+		},
+	})
+	if len(out.Resubmit) != 1 || out.Resubmit[0].RequestID != "after" {
+		t.Fatalf("resubmit %+v", out.Resubmit)
+	}
+	got := kindsOf(sess.QueuedMessages())
+	if len(got) != 3 || got["took"] != KindDaemonQueuedDiscardable || got["after"] != KindDaemonQueuedDiscardable || got["l1"] != KindLocalPausedAfterEsc {
+		t.Fatalf("queue after the reload %v", got)
+	}
+
+	// That load settled the drop: what is left is like any queued message.
+	out = loadWith(t, s, id, protocol.LoadSessionResult{PendingMessageRequestIDs: []string{"took"}})
+	if len(out.Resubmit) != 1 || out.Resubmit[0].RequestID != "after" {
+		t.Fatalf("resubmit after the drop settled %+v", out.Resubmit)
+	}
+}
+
+// A Daemon older than pendingMessageRequestIds cannot say it took a message
+// queued when the connection dropped: it goes, unsent, even while the loop
+// runs.
+func TestQueueAfterATransportDropOnAnOlderDaemon(t *testing.T) {
+	s, clk := newTestStore()
+	const id = "s1"
+	loadWith(t, s, id, protocol.LoadSessionResult{})
+	sess := s.Session(id)
+	sess.QueueUserMessages(queued("q1", "interrupted", KindDaemonQueuedDiscardable, clk.now()))
+	s.MarkQueuesTransportInterrupted(id)
+	loop := true
+	out := loadWith(t, s, id, protocol.LoadSessionResult{IsAgentLoopInProgress: &loop})
+	if len(out.Resubmit) != 0 || len(sess.QueuedMessages()) != 0 {
+		t.Fatalf("resubmit %+v, queue %+v", out.Resubmit, sess.QueuedMessages())
+	}
+	// Re-queued by the user after the drop, it is a fresh message.
+	sess.QueueUserMessages(queued("q1", "interrupted", KindDaemonQueuedDiscardable, clk.now()))
+	if out := loadWith(t, s, id, protocol.LoadSessionResult{}); len(out.Resubmit) != 1 {
+		t.Fatalf("resubmit %+v", out.Resubmit)
+	}
+}
+
+// A drop after the result arrived is newer than what the result says: the
+// result treats the queue as before the drop, and the drop's mark, made
+// again once the result is applied, waits for the next load.
+func TestALoadResultPinsTheDropsItAnswers(t *testing.T) {
+	s, clk := newTestStore()
+	const id = "s1"
+	loadWith(t, s, id, protocol.LoadSessionResult{})
+	sess := s.Session(id)
+	sess.QueueUserMessages(queued("q1", "lost", KindDaemonQueuedDiscardable, clk.now()))
+	tok := s.AtLoadResult(s.BeginLoad(id))
+	s.MarkQueuesTransportInterrupted()
+	out := s.ApplyLoadResult(tok, &protocol.LoadSessionResult{PendingMessageRequestIDs: []string{}}, 0)
+	if len(out.Resubmit) != 1 || out.Resubmit[0].RequestID != "q1" {
+		t.Fatalf("resubmit %+v", out.Resubmit)
+	}
+	s.MarkQueuesTransportInterrupted(id)
+	if out := loadWith(t, s, id, protocol.LoadSessionResult{PendingMessageRequestIDs: []string{}}); len(out.Resubmit) != 0 || len(sess.QueuedMessages()) != 0 {
+		t.Fatalf("after the newer drop: resubmit %+v, queue %+v", out.Resubmit, sess.QueuedMessages())
+	}
+}
+
+func withSeq(m protocol.FactoryDroidMessage, seq int64) protocol.FactoryDroidMessage {
+	m.Seq = &seq
+	return m
+}
+
+// Messages the Daemon stamped with a seq are in seq order, whenever they
+// arrive; rows without one keep their place.
+func TestMessagesFollowSeq(t *testing.T) {
+	s, _ := newTestStore()
+	const id = "s1"
+	loadWith(t, s, id, protocol.LoadSessionResult{Session: protocol.Session{Messages: []protocol.FactoryDroidMessage{
+		withSeq(msg("a1", roleAssistant, "hi", 20, "u1"), 1),
+		withSeq(msg("u1", roleUser, "hello", 10, ""), 0),
+	}}})
+	sess := s.Session(id)
+	if got := idsOf(sess.Messages()); got != "u1,a1" {
+		t.Fatalf("loaded %s", got)
+	}
+	send(t, s, id, created(withSeq(msg("a3", roleAssistant, "late", 40, ""), 3), ""))
+	send(t, s, id, created(withSeq(msg("u2", roleUser, "again", 30, ""), 2), ""))
+	if got := idsOf(sess.Messages()); got != "u1,a1,u2,a3" {
+		t.Fatalf("out of order %s", got)
+	}
+	// Unconfirmed, x keeps its arrival place; confirmed, it moves to its seq.
+	send(t, s, id, created(msg("x", roleUser, "unconfirmed", 50, ""), ""))
+	send(t, s, id, created(withSeq(msg("y", roleAssistant, "y", 60, ""), 4), ""))
+	send(t, s, id, created(withSeq(msg("z", roleAssistant, "z", 70, ""), 5), ""))
+	if got := idsOf(sess.Messages()); got != "u1,a1,u2,a3,x,y,z" {
+		t.Fatalf("before the confirmation %s", got)
+	}
+	send(t, s, id, created(withSeq(msg("x", roleUser, "unconfirmed", 50, ""), 6), ""))
+	if got := idsOf(sess.Messages()); got != "u1,a1,u2,a3,y,z,x" {
+		t.Fatalf("after the confirmation %s", got)
+	}
+}
+
+// Rows without a seq are floors a stamped row does not pass, unless a larger
+// seq sits before the floor: then the thread is sorted, the row without one
+// keeping its place after the row before it.
+func TestSeqLessRowsAreFloors(t *testing.T) {
+	s, _ := newTestStore()
+	const id = "s1"
+	loadWith(t, s, id, protocol.LoadSessionResult{Session: protocol.Session{Messages: []protocol.FactoryDroidMessage{
+		msg("h1", roleUser, "legacy", 10, ""),
+		msg("h2", roleAssistant, "legacy", 20, "h1"),
+	}}})
+	sess := s.Session(id)
+	send(t, s, id, created(withSeq(msg("n1", roleUser, "new", 5, ""), 7), ""))
+	if got := idsOf(sess.Messages()); got != "h1,h2,n1" {
+		t.Fatalf("after the floor %s", got)
+	}
+	send(t, s, id, created(msg("f", roleUser, "floor", 30, ""), ""))
+	send(t, s, id, created(withSeq(msg("n0", roleUser, "earlier", 40, ""), 3), ""))
+	// Effective seqs: h1 0, h2 1, n1 7, f 8, n0 3.
+	if got := idsOf(sess.Messages()); got != "h1,h2,n0,n1,f" {
+		t.Fatalf("sorted %s", got)
 	}
 }
 

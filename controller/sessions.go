@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -260,6 +261,7 @@ func (c *Controller) load(ctx context.Context, cl *droid.Client, cred *droid.Cre
 		}
 		return fail(err)
 	}
+	tok = c.store.AtLoadResult(tok)
 	c.mu.Lock()
 	t.loading = nil
 	t.params = stash(p)
@@ -284,6 +286,14 @@ func (c *Controller) load(ctx context.Context, cl *droid.Client, cred *droid.Cre
 		limit = int(*p.MessageLimit)
 	}
 	outcome := c.store.ApplyLoadResult(tok, res, limit)
+	c.mu.Lock()
+	closedSinceResult := c.gen != gen
+	c.mu.Unlock()
+	if closedSinceResult {
+		// The Daemon may take or drop the queue during that newer drop,
+		// which res predates: the next load decides on it.
+		c.store.MarkQueuesTransportInterrupted(sessionID)
+	}
 	c.store.MarkActive(sessionID)
 	ws := outcome.ReportedWorkingState
 	if pending {
@@ -300,23 +310,30 @@ func (c *Controller) load(ctx context.Context, cl *droid.Client, cred *droid.Cre
 }
 
 // resubmit sends again the queued messages a load found the Daemon lost;
-// those it cannot send stay queued, paused.
+// they stay queued until their create_message comes. Those it cannot send
+// stay queued, paused, unless they were delivered meanwhile.
 func (c *Controller) resubmit(cl *droid.Client, sessionID string, msgs []session.QueuedMessage) {
 	ctx, cancel := c.stopContext()
 	defer cancel()
-	for i, q := range msgs {
-		if _, err := cl.AddUserMessage(droid.WithRequestID(ctx, q.RequestID), session.ResubmitParams(q)); err != nil {
-			c.log.Warn("droid: resend queued message", "sessionId", sessionID, "err", err)
-			if s := c.store.Session(sessionID); s != nil {
-				rest := msgs[i:]
-				for j := range rest {
-					rest[j].Kind = session.KindLocalPausedAfterEsc
-				}
-				s.RestoreQueuedMessagesToFront(rest)
-			}
-			return
+	var failed []session.QueuedMessage
+	for _, q := range msgs {
+		p := session.ResubmitParams(q)
+		p.SessionID = sessionID
+		if _, err := cl.AddUserMessage(droid.WithRequestID(ctx, q.RequestID), p); err != nil {
+			c.log.Warn("droid: resend queued message", "sessionId", sessionID, "requestId", q.RequestID, "err", err)
+			q.Kind = session.KindLocalPausedAfterEsc
+			failed = append(failed, q)
 		}
 	}
+	s := c.store.Session(sessionID)
+	if s == nil || len(failed) == 0 {
+		return
+	}
+	failed = slices.DeleteFunc(failed, func(q session.QueuedMessage) bool {
+		_, ok := s.QueuedMessage(q.RequestID)
+		return !ok
+	})
+	s.RestoreQueuedMessagesToFront(failed)
 }
 
 func ptr[T any](v T) *T { return &v }

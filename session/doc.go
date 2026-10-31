@@ -22,7 +22,9 @@
 //	tok := store.BeginLoad(id)               // marks it Loading
 //	res, err := client.LoadSession(ctx, params)
 //	if err != nil { store.MarkNotLoaded(id) } // or MarkNotFound on -32004
+//	tok = store.AtLoadResult(tok)
 //	out := store.ApplyLoadResult(tok, res, limit)
+//	// a connection dropped since res came: MarkQueuesTransportInterrupted(id)
 //	// restore prompts, resubmit out.Resubmit, then:
 //	store.ApplyLoadedWorkingState(tok, out.ReportedWorkingState)
 //
@@ -60,7 +62,10 @@
 // HandleOptions.PreserveWorkingStateOnInactive, or rewriting an idle
 // working state to waiting, while one is pending); MarkActive after a load;
 // hydrating a child Session with load_session after
-// child_session_available; resending LoadOutcome.Resubmit; and, after
-// add_user_message while the agent works, Session.QueueUserMessages with
-// KindForPlacement (or SetWorkingState(streaming) when it was idle).
+// child_session_available; resending LoadOutcome.Resubmit;
+// MarkQueuesTransportInterrupted when the connection drops, so that the
+// next load decides on the queued messages instead of sending them again;
+// and, after add_user_message while the agent works,
+// Session.QueueUserMessages with KindForPlacement (or
+// SetWorkingState(streaming) when it was idle).
 package session

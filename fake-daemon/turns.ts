@@ -65,7 +65,7 @@ interface RunTurnInput extends StreamedReplyOptions {
   content?: Array<Record<string, unknown>>
 }
 
-const activeTurns = new Map<string, TurnHandle & { cancelled: boolean }>()
+const activeTurns = new Map<string, TurnHandle & { cancelled: boolean; requestId?: string }>()
 
 /** 10k of prompt (input + cache read) on every scripted call. */
 export const LAST_CALL_TOKEN_USAGE = {
@@ -103,6 +103,41 @@ export function withQueue(handler: MethodHandler): MethodHandler {
     heldMessages.set(sessionId, held)
     return {}
   }
+}
+
+/**
+ * What daemon.load_session reports of a Session's scripted turn, as the real
+ * Daemon does: whether the agent loop runs, the messages it holds for after
+ * the turn (queuedMessages), and the requests it admitted
+ * (pendingMessageRequestIds: the running turn's and the held ones).
+ */
+export function turnLoadState(sessionId: string): Record<string, unknown> {
+  const turn = activeTurns.get(sessionId)
+  const held = heldMessages.get(sessionId) ?? []
+  return {
+    ...(turn ? { isAgentLoopInProgress: true, workingState: 'streaming_assistant_message' } : {}),
+    ...(held.length > 0
+      ? {
+          queuedMessages: held.map((m) => ({
+            requestId: String(m.request.id),
+            text: String(m.params['text'] ?? ''),
+            queuePlacement: m.placement,
+          })),
+        }
+      : {}),
+    pendingMessageRequestIds: [
+      ...(turn?.requestId ? [turn.requestId] : []),
+      ...held.map((m) => String(m.request.id)),
+    ],
+  }
+}
+
+/** Wraps a `daemon.load_session` handler so that its result reports {@link turnLoadState}. */
+export function withTurnState(load: MethodHandler): MethodHandler {
+  return async (params, context, request) => ({
+    ...((await load(params, context, request)) as Record<string, unknown>),
+    ...turnLoadState(String(params['sessionId'])),
+  })
 }
 
 /** Handler for `daemon.resolve_queued_user_message`: only `delete` is scripted. */
@@ -156,6 +191,7 @@ async function runTurn(input: RunTurnInput): Promise<void> {
   const turn = {
     sessionId,
     turnId: userMessageId,
+    requestId,
     cancelled: false,
     cancel() {
       this.cancelled = true

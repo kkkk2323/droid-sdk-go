@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -205,8 +206,9 @@ func (t *thread) recomputeLastConv() {
 	}
 }
 
-// add stores a new message where its parent chain puts it, falling back to
-// timestamp order; a message already present is replaced in place.
+// add stores a new message: by its seq when the Daemon stamped one, else
+// where its parent chain puts it, falling back to timestamp order. A
+// message already present is replaced in place.
 func (t *thread) add(m message) {
 	m = t.normalizeParent(m)
 	if _, exists := t.byID[m.ID]; exists {
@@ -215,6 +217,19 @@ func (t *thread) add(m message) {
 	}
 	t.byID[m.ID] = m
 	side := isSideband(m)
+	if m.Seq != nil {
+		t.insertBySeq(m)
+		if !side {
+			// A late row slotted mid-transcript is not the tip later rows
+			// hang from.
+			if t.order[len(t.order)-1] == m.ID {
+				t.lastConv = m.ID
+			} else {
+				t.recomputeLastConv()
+			}
+		}
+		return
+	}
 	switch {
 	case side || t.lastConv == "" || m.ParentID == t.lastConv:
 		t.order = append(t.order, m.ID)
@@ -238,6 +253,64 @@ func (t *thread) add(m message) {
 	if !side {
 		t.lastConv = m.ID
 	}
+}
+
+// insertBySeq places a message after the rows with a smaller seq. Rows
+// without one are floors: history from before seq precedes every stamped
+// row, and unconfirmed rows keep their arrival place at the tail. When a
+// larger seq sits before such a floor, the whole thread is sorted.
+func (t *thread) insertBySeq(m message) {
+	at := len(t.order)
+	for at > 0 {
+		c := t.byID[t.order[at-1]]
+		if c.Seq == nil {
+			if slices.ContainsFunc(t.order[:at-1], func(id string) bool {
+				p := t.byID[id]
+				return p.Seq != nil && *p.Seq > *m.Seq
+			}) {
+				t.order = append(t.order, m.ID)
+				t.order = messageIDs(sortBySeq(t.all()))
+				return
+			}
+			break
+		}
+		if *c.Seq <= *m.Seq {
+			break
+		}
+		at--
+	}
+	t.order = slices.Insert(t.order, at, m.ID)
+}
+
+// sortBySeq orders messages by seq, stably: a message without one takes the
+// one before it plus one, so it keeps its place after it.
+func sortBySeq(msgs []message) []message {
+	eff := make(map[string]int64, len(msgs))
+	prev, sorted := int64(-1), true
+	for i, m := range msgs {
+		if m.Seq != nil {
+			prev = *m.Seq
+		} else {
+			prev++
+		}
+		if i > 0 && prev < eff[msgs[i-1].ID] {
+			sorted = false
+		}
+		eff[m.ID] = prev
+	}
+	out := slices.Clone(msgs)
+	if !sorted {
+		slices.SortStableFunc(out, func(a, b message) int { return cmp.Compare(eff[a.ID], eff[b.ID]) })
+	}
+	return out
+}
+
+func messageIDs(msgs []message) []string {
+	ids := make([]string, len(msgs))
+	for i, m := range msgs {
+		ids[i] = m.ID
+	}
+	return ids
 }
 
 func (t *thread) insertByTimestamp(m message) {
@@ -284,6 +357,14 @@ func (t *thread) set(m message) bool {
 		return false
 	}
 	t.byID[m.ID] = m
+	if old.Seq == nil && m.Seq != nil {
+		// An unconfirmed row got its seq: it moves into place, so that a
+		// confirmation landing after later rows does not strand it.
+		t.order = slices.DeleteFunc(t.order, func(o string) bool { return o == m.ID })
+		t.insertBySeq(m)
+		t.recomputeLastConv()
+		return true
+	}
 	if isSideband(old) != isSideband(m) {
 		t.recomputeLastConv()
 	}
@@ -901,7 +982,12 @@ func orderByParentChain(msgs []message) []message {
 	return chain
 }
 
+// orderMerged orders a merged transcript: by seq once the Daemon stamps
+// one; by parent chain when the messages form one tree, by time otherwise.
 func orderMerged(msgs []message) []message {
+	if slices.ContainsFunc(msgs, func(m message) bool { return m.Seq != nil }) {
+		return sortBySeq(msgs)
+	}
 	if isSingleRooted(msgs) {
 		return orderByParentChain(msgs)
 	}

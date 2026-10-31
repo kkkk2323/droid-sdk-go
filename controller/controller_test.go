@@ -256,6 +256,137 @@ func TestQueuedAskUserTurn(t *testing.T) {
 	}
 }
 
+// addUserMessages counts the add_user_message requests the Fake Daemon got.
+func addUserMessages(t *testing.T, d *fakedaemon.Daemon) int {
+	t.Helper()
+	reqs, err := d.Requests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range reqs {
+		if r.Method == protocol.MethodAddUserMessage {
+			n++
+		}
+	}
+	return n
+}
+
+// queuedWhileBusy sends one message to start a long turn and a second one
+// while it runs, which the Daemon holds and the store shows queued; it
+// returns the second one's request id.
+func queuedWhileBusy(t *testing.T, c *controller.Controller, id string) string {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := c.AddUserMessage(ctx, protocol.AddUserMessageParams{SessionID: id, Text: "Start"}); err != nil {
+		t.Fatal(err)
+	}
+	const held = "held-message"
+	if _, err := c.AddUserMessage(droid.WithRequestID(ctx, held), protocol.AddUserMessageParams{SessionID: id, Text: "And then this"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Store().Session(id).QueuedMessage(held); !ok {
+		t.Fatal("the second message is not queued")
+	}
+	return held
+}
+
+// A message the Daemon held when the connection dropped stays queued and is
+// not sent again: the reload finds it in the Daemon's queue, and it goes
+// when the Daemon runs it.
+func TestAQueuedMessageIsNotSentAgainAfterADrop(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+		Turn:     &fakedaemon.Turn{Kind: "reply", Deltas: []string{"a", "b", "c", "d", "e", "f"}, DelayMs: 300},
+	})
+	c, r := start(t, d, controller.Config{ReconnectDelay: 100 * time.Millisecond, MaxReconnectAttempts: 10})
+	id := d.Sessions[0].SessionID
+	if _, err := c.LoadSession(context.Background(), protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	held := queuedWhileBusy(t, c, id)
+	if err := d.GoDown(); err != nil {
+		t.Fatal(err)
+	}
+	_, next := r.wait(t, 0, "reconnecting", func(e controller.Event) bool {
+		s, ok := e.(controller.StatusChanged)
+		return ok && s.Status.Reconnecting
+	})
+	if _, ok := c.Store().Session(id).QueuedMessage(held); !ok {
+		t.Fatal("the dropped connection took the queued message off")
+	}
+	if err := d.ComeBack(); err != nil {
+		t.Fatal(err)
+	}
+	_, next = r.wait(t, next, "loaded again", func(e controller.Event) bool {
+		l, ok := e.(controller.SessionLoaded)
+		return ok && l.SessionID == id
+	})
+	if _, ok := c.Store().Session(id).QueuedMessage(held); !ok {
+		t.Fatal("the message the Daemon holds is not queued after the reload")
+	}
+	r.wait(t, next, "the held message's turn", func(e controller.Event) bool {
+		n, ok := e.(controller.SessionNotification)
+		if !ok {
+			return false
+		}
+		cm, ok := n.Value.(*protocol.CreateMessageNotification)
+		return ok && cm.RequestID == held
+	})
+	if _, ok := c.Store().Session(id).QueuedMessage(held); ok {
+		t.Fatal("still queued after its create_message")
+	}
+	if n := addUserMessages(t, d); n != 2 {
+		t.Fatalf("%d add_user_message requests, want 2", n)
+	}
+}
+
+// A message the Daemon took into a turn while the connection was down is
+// not in its queue at the reload, but it is admitted: it stays queued and is
+// not sent again.
+func TestAMessageTheDaemonTookDuringADropIsNotSentAgain(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+		Turn:     &fakedaemon.Turn{Kind: "reply", Deltas: []string{"a", "b", "c", "d", "e", "f"}, DelayMs: 300},
+	})
+	c, r := start(t, d, controller.Config{ReconnectDelay: 100 * time.Millisecond, ReconnectBackoff: 1, MaxReconnectAttempts: 100})
+	id := d.Sessions[0].SessionID
+	if _, err := c.LoadSession(context.Background(), protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	held := queuedWhileBusy(t, c, id)
+	if err := d.GoDown(); err != nil {
+		t.Fatal(err)
+	}
+	_, next := r.wait(t, 0, "reconnecting", func(e controller.Event) bool {
+		s, ok := e.(controller.StatusChanged)
+		return ok && s.Status.Reconnecting
+	})
+	// The first turn (1.8s) ends while the Daemon is unreachable, and the
+	// held message's turn starts.
+	time.Sleep(2 * time.Second)
+	if err := d.ComeBack(); err != nil {
+		t.Fatal(err)
+	}
+	r.wait(t, next, "loaded again", func(e controller.Event) bool {
+		l, ok := e.(controller.SessionLoaded)
+		if !ok || l.SessionID != id {
+			return false
+		}
+		if l.Result.IsAgentLoopInProgress == nil || !*l.Result.IsAgentLoopInProgress || len(l.Result.QueuedMessages) != 0 {
+			t.Fatalf("the held message's turn is not running at the reload: %+v", l.Result)
+		}
+		return true
+	})
+	if _, ok := c.Store().Session(id).QueuedMessage(held); !ok {
+		t.Fatal("the message the Daemon took is not queued after the reload")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := addUserMessages(t, d); n != 2 {
+		t.Fatalf("%d add_user_message requests, want 2", n)
+	}
+}
+
 func TestReconnectLoadsSessionsAgain(t *testing.T) {
 	d := fakedaemon.Start(t, fakedaemon.Scenario{
 		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},

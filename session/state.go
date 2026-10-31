@@ -89,6 +89,10 @@ type state struct {
 	queued         []QueuedMessage
 	processed      map[string]bool
 	processedOrder []string
+	// interrupted are the Daemon-backed queued messages that were queued
+	// when the connection dropped: the Daemon may have taken or dropped
+	// them meanwhile, so the next load's word on them is final.
+	interrupted map[string]bool
 
 	optimistic       map[string]optimisticEntry
 	optimisticSeq    int
@@ -125,6 +129,7 @@ func newState(s *Store, id string) *state {
 		thinkIndex:       map[blockKey]int{},
 		todos:            newTodoState(),
 		processed:        map[string]bool{},
+		interrupted:      map[string]bool{},
 		optimistic:       map[string]optimisticEntry{},
 		confirmedLeading: map[string]bool{},
 		phases:           map[string]protocol.ToolExecutionLifecyclePhase{},

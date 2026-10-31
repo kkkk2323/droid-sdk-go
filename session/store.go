@@ -34,6 +34,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -396,7 +397,7 @@ func (s *Store) removeSession(id string) {
 	}
 }
 
-// ClearAllQueues empties every Session's queue, as on disconnect.
+// ClearAllQueues empties every Session's queue.
 func (s *Store) ClearAllQueues() {
 	s.update(func() {
 		for _, st := range s.sessions {
@@ -573,6 +574,9 @@ type LoadToken struct {
 	WorkingStateRevision int
 	summaryEpoch         int
 	summaryRev           int
+	// interrupted pins, when the result arrived, the queued messages a
+	// dropped connection interrupted (see AtLoadResult); nil until then.
+	interrupted map[string]bool
 }
 
 // BeginLoad marks a Session Loading (see MarkLoading) and returns the token
@@ -603,6 +607,37 @@ func (s *Store) BeginLoad(id string) LoadToken {
 	return tok
 }
 
+// AtLoadResult pins on tok what the load result answers that can change
+// before ApplyLoadResult takes it: the queued messages a dropped connection
+// interrupted. Call it as the result arrives. A connection that drops
+// after that marks the queue again, which the controller then repeats with
+// MarkQueuesTransportInterrupted once ApplyLoadResult is done, as that
+// result predates the drop. Without it ApplyLoadResult reads them itself.
+func (s *Store) AtLoadResult(tok LoadToken) LoadToken {
+	s.update(func() {
+		tok.interrupted = map[string]bool{}
+		if st := s.sessions[tok.SessionID]; st != nil {
+			maps.Copy(tok.interrupted, st.interrupted)
+		}
+	})
+	return tok
+}
+
+// MarkQueuesTransportInterrupted keeps the Daemon-backed queued messages of
+// the given Sessions (all of them when none is given) shown after the
+// connection drops, marked so that the next load reconciles them against the
+// Daemon's queue instead of sending them again: the Daemon may have taken
+// or dropped them while the connection was down.
+func (s *Store) MarkQueuesTransportInterrupted(ids ...string) {
+	s.update(func() {
+		for id, st := range s.sessions {
+			if len(ids) == 0 || slices.Contains(ids, id) {
+				st.markTransportInterrupted()
+			}
+		}
+	})
+}
+
 // LoadOutcome is what ApplyLoadResult leaves to the controller.
 type LoadOutcome struct {
 	// ReportedWorkingState is the working state the result reported (the
@@ -610,8 +645,9 @@ type LoadOutcome struct {
 	// WaitingForToolConfirmation when prompts are pending, through
 	// ApplyLoadedWorkingState.
 	ReportedWorkingState protocol.DroidWorkingState
-	// Resubmit are queued messages the Daemon lost; send each again with
-	// ResubmitParams and put those that fail back with
+	// Resubmit are queued messages the Daemon lost; they stay queued until
+	// their create_message comes. Send each again with ResubmitParams (and
+	// its RequestID) and put those that fail and are still queued back with
 	// Session.RestoreQueuedMessagesToFront as KindLocalPausedAfterEsc.
 	Resubmit []QueuedMessage
 }
@@ -645,7 +681,11 @@ func (s *Store) ApplyLoadResult(tok LoadToken, res *protocol.LoadSessionResult, 
 			lc := LastCallTokenUsage(*res.LastCallTokenUsage)
 			st.setLastCall(&lc)
 		}
-		out.Resubmit = st.reconcileQueue(res)
+		interrupted := tok.interrupted
+		if interrupted == nil {
+			interrupted = maps.Clone(st.interrupted)
+		}
+		out.Resubmit = st.reconcileQueue(res, interrupted)
 		if len(res.AvailableModels) > 0 {
 			st.setModels(res.AvailableModels)
 		}

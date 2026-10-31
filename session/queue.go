@@ -82,6 +82,7 @@ func (st *state) queueMessages(msgs []QueuedMessage) {
 		} else {
 			st.queued = append(st.queued, q)
 		}
+		delete(st.interrupted, q.RequestID)
 		queued = true
 	}
 	if !queued {
@@ -98,6 +99,7 @@ func (st *state) queueMessages(msgs []QueuedMessage) {
 func (st *state) replaceDaemonQueued(msgs []QueuedMessage) {
 	next := make([]QueuedMessage, 0, len(st.queued)+len(msgs))
 	changed, removedOptimistic := false, false
+	clear(st.interrupted)
 	for _, q := range st.queued {
 		if q.Kind.DaemonBacked() {
 			changed = true
@@ -131,6 +133,7 @@ func (st *state) clearQueued(requestID string) {
 	if i := st.indexOfQueued(requestID); i >= 0 {
 		st.queued = slices.Delete(st.queued, i, i+1)
 	}
+	delete(st.interrupted, requestID)
 	st.emit(EventQueuedMessagesUpdated)
 }
 
@@ -138,7 +141,11 @@ func (st *state) clearQueued(requestID string) {
 func (st *state) clearQueuedKinds(kinds []QueuedMessageKind) {
 	n := len(st.queued)
 	st.queued = slices.DeleteFunc(st.queued, func(q QueuedMessage) bool {
-		return len(kinds) == 0 || slices.Contains(kinds, q.Kind)
+		drop := len(kinds) == 0 || slices.Contains(kinds, q.Kind)
+		if drop {
+			delete(st.interrupted, q.RequestID)
+		}
+		return drop
 	})
 	if len(st.queued) != n {
 		st.emit(EventQueuedMessagesUpdated)
@@ -217,7 +224,19 @@ func (st *state) pauseDaemonQueued(restoredRequestID string) {
 		return
 	}
 	st.queued = paused
+	clear(st.interrupted)
 	st.emit(EventQueuedMessagesUpdated)
+}
+
+// markTransportInterrupted keeps the Daemon-backed queued messages shown
+// across a dropped connection, marked so that the next load reconciles them
+// against the Daemon's queue instead of sending them again.
+func (st *state) markTransportInterrupted() {
+	for _, q := range st.queued {
+		if q.Kind.DaemonBacked() {
+			st.interrupted[q.RequestID] = true
+		}
+	}
 }
 
 func (st *state) rememberProcessed(requestID string) {
@@ -474,14 +493,24 @@ func delivered(loaded []message, q QueuedMessage) bool {
 
 // reconcileQueue replaces the Daemon-backed queue with the one a load
 // reported and returns the messages this Client queued that the Daemon
-// neither holds nor delivered: they must be sent again (ResubmitParams).
-// While the agent loop runs such messages may still be draining, so they
-// stay queued instead.
-func (st *state) reconcileQueue(res *protocol.LoadSessionResult) []QueuedMessage {
+// neither holds nor delivered: they must be sent again (ResubmitParams),
+// and stay queued until their create_message comes. A message the Daemon
+// admitted (pendingMessageRequestIds; older Daemons only say whether the
+// agent loop runs) may still be draining, so it stays queued instead.
+// interrupted are the messages queued when the connection dropped, as of
+// when res arrived: the Daemon may have taken or dropped them meanwhile, so
+// one stays only when the Daemon reports it admitted, and is never sent
+// again.
+func (st *state) reconcileQueue(res *protocol.LoadSessionResult, interrupted map[string]bool) []QueuedMessage {
 	now := st.s.now()
 	var restored []QueuedMessage
 	restoredIDs := map[string]bool{}
 	for _, q := range res.QueuedMessages {
+		// A peer Session's message waits in the same queue, but it is the
+		// peer's to deliver: it is not shown, sent again or cleared here.
+		if q.Sender != nil {
+			continue
+		}
 		restored = append(restored, QueuedMessage{
 			RequestID: q.RequestID,
 			Content:   UserContent(q.Text, q.Content, q.Images, q.Files),
@@ -491,18 +520,32 @@ func (st *state) reconcileQueue(res *protocol.LoadSessionResult) []QueuedMessage
 		restoredIDs[q.RequestID] = true
 	}
 	loopRunning := res.IsAgentLoopInProgress != nil && *res.IsAgentLoopInProgress
+	// nil from Daemons older than pendingMessageRequestIds.
+	var admitted map[string]bool
+	if res.PendingMessageRequestIDs != nil {
+		admitted = map[string]bool{}
+		for _, id := range res.PendingMessageRequestIDs {
+			admitted[id] = true
+		}
+	}
 	var retained, resubmit []QueuedMessage
 	for _, q := range st.queued {
 		if !q.Kind.DaemonBacked() || restoredIDs[q.RequestID] || delivered(res.Session.Messages, q) {
 			continue
 		}
-		if loopRunning {
-			retained = append(retained, q)
-		} else {
-			resubmit = append(resubmit, q)
+		if interrupted[q.RequestID] {
+			if admitted[q.RequestID] {
+				retained = append(retained, q)
+			}
+			continue
 		}
+		if admitted != nil && admitted[q.RequestID] || admitted == nil && loopRunning {
+			retained = append(retained, q)
+			continue
+		}
+		resubmit = append(resubmit, q)
 	}
-	st.replaceDaemonQueued(append(restored, retained...))
+	st.replaceDaemonQueued(slices.Concat(restored, retained, resubmit))
 	return resubmit
 }
 

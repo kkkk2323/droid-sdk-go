@@ -39695,6 +39695,30 @@ function withQueue(handler2) {
     return {};
   };
 }
+function turnLoadState(sessionId) {
+  const turn = activeTurns.get(sessionId);
+  const held = heldMessages.get(sessionId) ?? [];
+  return {
+    ...turn ? { isAgentLoopInProgress: true, workingState: "streaming_assistant_message" } : {},
+    ...held.length > 0 ? {
+      queuedMessages: held.map((m) => ({
+        requestId: String(m.request.id),
+        text: String(m.params["text"] ?? ""),
+        queuePlacement: m.placement
+      }))
+    } : {},
+    pendingMessageRequestIds: [
+      ...turn?.requestId ? [turn.requestId] : [],
+      ...held.map((m) => String(m.request.id))
+    ]
+  };
+}
+function withTurnState(load) {
+  return async (params, context, request) => ({
+    ...await load(params, context, request),
+    ...turnLoadState(String(params["sessionId"]))
+  });
+}
 var resolveQueuedHandler = (params) => {
   const sessionId = String(params["sessionId"]);
   const held = heldMessages.get(sessionId) ?? [];
@@ -39738,6 +39762,7 @@ async function runTurn(input2) {
   const turn = {
     sessionId,
     turnId: userMessageId,
+    requestId,
     cancelled: false,
     cancel() {
       this.cancelled = true;
@@ -40431,6 +40456,10 @@ var daemon = await FakeDaemon.start({
   },
   validDirectories: spec.validDirectories
 });
+daemon.scenario.on(
+  "daemon.load_session",
+  withTurnState(daemon.scenario.handlers["daemon.load_session"])
+);
 var wsUrl = daemon.url.replace(/^http/, "ws") + "/daemon?token=" + encodeURIComponent(daemon.token);
 var out = (v) => process.stdout.write(JSON.stringify(v) + "\n");
 out({
