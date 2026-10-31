@@ -13,8 +13,8 @@ export interface McpServerFixture {
     name: string;
     /** Defaults to connected. */
     status?: 'connecting' | 'connected' | 'disconnected' | 'failed' | 'disabled';
-    /** Defaults to user. */
-    source?: 'user' | 'project' | 'org';
+    /** Defaults to user. runtime is a server a `--settings` file (a Client's Runtime Overlay) adds. */
+    source?: 'user' | 'project' | 'org' | 'runtime';
     type?: 'stdio' | 'http' | 'sse';
     toolCount?: number;
     error?: string;
