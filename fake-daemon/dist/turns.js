@@ -354,16 +354,32 @@ export function queuedAskUserTurn(options) {
         void (async () => {
             startTurn(daemon, sessionId, userMessageId, String(params['text']), String(request.id));
             const toolUseId = `call_${randomUUID().slice(0, 8)}`;
-            daemon.notify(sessionId, {
-                type: 'tool_call',
-                toolUse: {
-                    type: 'tool_use',
-                    id: toolUseId,
-                    name: 'AskUser',
-                    input: { blocking: false, context: options.context },
-                },
-            });
             const question = options.question;
+            const toolUse = {
+                type: 'tool_use',
+                id: toolUseId,
+                name: 'AskUser',
+                input: {
+                    questionnaire: `1. [question] ${question}\n[topic] Choice\n${options.options.map((o) => `[option] ${o}`).join('\n')}`,
+                    blocking: false,
+                    context: options.context,
+                },
+            };
+            daemon.notify(sessionId, { type: 'tool_call', toolUse });
+            // The real Daemon commits the call's message before the result, so the
+            // AskUser row stays in the transcript when the reply follows.
+            const committed = Date.now();
+            daemon.notify(sessionId, {
+                type: 'create_message',
+                message: {
+                    id: randomUUID(),
+                    role: 'assistant',
+                    content: [toolUse],
+                    createdAt: committed,
+                    updatedAt: committed,
+                },
+                parentId: userMessageId,
+            });
             const asked = daemon.request('daemon.ask_user', {
                 sessionId,
                 toolCallId: toolUseId,

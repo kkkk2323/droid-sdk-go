@@ -39970,16 +39970,32 @@ function queuedAskUserTurn(options) {
     void (async () => {
       startTurn(daemon2, sessionId, userMessageId, String(params["text"]), String(request.id));
       const toolUseId = `call_${randomUUID5().slice(0, 8)}`;
-      daemon2.notify(sessionId, {
-        type: "tool_call",
-        toolUse: {
-          type: "tool_use",
-          id: toolUseId,
-          name: "AskUser",
-          input: { blocking: false, context: options.context }
-        }
-      });
       const question = options.question;
+      const toolUse = {
+        type: "tool_use",
+        id: toolUseId,
+        name: "AskUser",
+        input: {
+          questionnaire: `1. [question] ${question}
+[topic] Choice
+${options.options.map((o) => `[option] ${o}`).join("\n")}`,
+          blocking: false,
+          context: options.context
+        }
+      };
+      daemon2.notify(sessionId, { type: "tool_call", toolUse });
+      const committed = Date.now();
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: {
+          id: randomUUID5(),
+          role: "assistant",
+          content: [toolUse],
+          createdAt: committed,
+          updatedAt: committed
+        },
+        parentId: userMessageId
+      });
       const asked = daemon2.request("daemon.ask_user", {
         sessionId,
         toolCallId: toolUseId,
