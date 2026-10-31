@@ -413,7 +413,7 @@ func (c *Controller) onNotification(gen int, n droid.Notification) {
 		v = nil
 	}
 	c.mu.Lock()
-	inactive, pending := c.prompts.inactive[p.SessionID], c.prompts.hasPending(p.SessionID)
+	inactive, pending := c.prompts.inactive[p.SessionID], c.prompts.waitsOnUser(p.SessionID)
 	c.mu.Unlock()
 	c.applyToStore(p, v, inactive, pending)
 	c.mu.Lock()

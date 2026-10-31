@@ -1951,6 +1951,11 @@ type AskUserParams struct {
 	ToolCallID string            `json:"toolCallId"`
 	Questions  []AskUserQuestion `json:"questions"`
 	SessionID  string            `json:"sessionId"`
+	// False for a queued question set (droid 1.1): the agent keeps working and the answers reach it later.
+	// Absent means blocking.
+	Blocking *bool `json:"blocking,omitempty"`
+	// A queued question set's self-contained explanation (droid 1.1), shown above its questions.
+	Context string `json:"context,omitempty"`
 }
 
 type AskUserResponse struct {
@@ -2719,6 +2724,9 @@ type ModelMetadata struct {
 	PromoLabel                string            `json:"promoLabel,omitempty"`
 	Kind                      ModelKind         `json:"kind,omitempty"`
 	VariantBadge              string            `json:"variantBadge,omitempty"`
+	// For a custom model, the built-in model whose behavior it inherits (droid 1.1): its baseModelId, else the closest built-in to its upstream model id.
+	// Absent when nothing matches, and from older Daemons.
+	BehavesLikeModelID string `json:"behavesLikeModelId,omitempty"`
 }
 
 type SessionWorktreeInfo struct {
@@ -2843,6 +2851,11 @@ type LoadSessionResultPendingAskUserRequestsItem struct {
 	ToolCallID string            `json:"toolCallId"`
 	Questions  []AskUserQuestion `json:"questions"`
 	RequestID  string            `json:"requestId"`
+	// False for a queued question set (droid 1.1).
+	// Absent means blocking.
+	Blocking *bool `json:"blocking,omitempty"`
+	// A queued question set's explanation (droid 1.1).
+	Context string `json:"context,omitempty"`
 }
 
 type DroidWorkingState string

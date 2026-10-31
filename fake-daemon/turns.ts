@@ -415,6 +415,108 @@ export function askUserTurn(options: AskUserTurnOptions): MethodHandler {
   }
 }
 
+export interface QueuedAskUserTurnOptions {
+  question: string
+  options: string[]
+  /** The set's explanation the Client shows above its question. */
+  context: string
+  /** What the agent streams while the question waits. */
+  reply: string
+}
+
+/**
+ * Handler for `daemon.add_user_message` where the agent queues a question
+ * (droid 1.1's AskUser with `blocking: false`) and keeps working: the tool
+ * returns at once and the turn ends with `reply`. When a Client answers, the
+ * Daemon saves a user-only receipt, reports the set resolved to every Client
+ * (`ask_user_resolved`), and gives the agent the record as a user message
+ * that starts a turn, as droid 1.1 does.
+ */
+export function queuedAskUserTurn(options: QueuedAskUserTurnOptions): MethodHandler {
+  return (params, context, request) => {
+    const sessionId = String(params['sessionId'])
+    const daemon = context.daemon
+    const userMessageId =
+      typeof params['messageId'] === 'string' ? params['messageId'] : randomUUID()
+    void (async () => {
+      startTurn(daemon, sessionId, userMessageId, String(params['text']), String(request.id))
+      const toolUseId = `call_${randomUUID().slice(0, 8)}`
+      daemon.notify(sessionId, {
+        type: 'tool_call',
+        toolUse: {
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'AskUser',
+          input: { blocking: false, context: options.context },
+        },
+      })
+      const question = options.question
+      const asked = daemon.request('daemon.ask_user', {
+        sessionId,
+        toolCallId: toolUseId,
+        questions: [{ index: 1, topic: 'Choice', question, options: options.options }],
+        blocking: false,
+        context: options.context,
+      })
+      daemon.notify(sessionId, {
+        type: 'tool_result',
+        toolUseId,
+        content:
+          "Queued. The user's answers will arrive later as a user message naming this AskUser call; keep working.",
+        isError: false,
+        messageId: randomUUID(),
+      })
+      await streamText(daemon, sessionId, options.reply)
+      finishTurn(daemon, sessionId, userMessageId, 'completed')
+
+      const response = await asked.answer
+      const result = response['result'] as Record<string, unknown> | undefined
+      const dismissed = result?.['cancelled'] === true
+      const answers = (result?.['answers'] ?? []) as Array<{ answer: string }>
+      const call = `(AskUser call ${toolUseId})`
+      const record = dismissed
+        ? `Dismissed queued questions ${call}: the user closed them without answering; their answers will not arrive.\nQ: ${JSON.stringify(question)}`
+        : `Answered queued questions ${call}:\nQ: ${JSON.stringify(question)}\nA: ${JSON.stringify(answers.map((a) => a.answer).join(', '))}`
+      const now = Date.now()
+      const text = [{ type: 'text', text: record }]
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: {
+          id: `ask-user-receipt:${toolUseId}`,
+          role: 'system',
+          visibility: 'user_only',
+          content: text,
+          createdAt: now,
+          updatedAt: now,
+        },
+      })
+      daemon.notify(sessionId, { type: 'ask_user_resolved', requestIds: [asked.id] })
+      daemon.notify(sessionId, {
+        type: 'droid_working_state_changed',
+        newState: 'streaming_assistant_message',
+      })
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: {
+          id: `ask-user-answer:${toolUseId}`,
+          role: 'user',
+          visibility: 'both',
+          content: text,
+          createdAt: now + 1,
+          updatedAt: now + 1,
+        },
+      })
+      daemon.notify(sessionId, { type: 'droid_working_state_changed', newState: 'thinking' })
+      await streamText(
+        daemon,
+        sessionId,
+        dismissed ? 'Understood, I will decide myself.' : `Noted: ${answers.map((a) => a.answer).join(', ')}.`,
+      )
+      finishTurn(daemon, sessionId, `ask-user-answer:${toolUseId}`, 'completed')
+    })()
+    return {}
+  }
+}
 function startTurn(
   daemon: FakeDaemon,
   sessionId: string,

@@ -123,6 +123,25 @@ const SpecHandoffSessionCreatedParams = z.object({
         timestamp: z.number(),
     }),
 });
+// Newer than the SDK's schemas (droid 1.1): queued AskUser sets the session
+// resolved, and a Task child settled on its parent's word.
+const AskUserResolvedParams = z.object({
+    sessionId: z.string(),
+    notification: z.object({
+        type: z.literal('ask_user_resolved'),
+        requestIds: z.array(z.string()),
+    }),
+});
+const ChildSessionSettledParams = z.object({
+    sessionId: z.string(),
+    notification: z.object({
+        type: z.literal('child_session_settled'),
+        childSessionId: z.string(),
+        toolUseId: z.string().optional(),
+        status: z.string(),
+        timestamp: z.number(),
+    }),
+});
 function either(first, ...rest) {
     return {
         safeParse(value) {
@@ -133,7 +152,7 @@ function either(first, ...rest) {
     };
 }
 const NOTIFICATION_SCHEMAS = {
-    'daemon.session_notification': either(SessionNotificationParamsSchema, SessionInactivityParams, SpecHandoffSessionCreatedParams),
+    'daemon.session_notification': either(SessionNotificationParamsSchema, SessionInactivityParams, SpecHandoffSessionCreatedParams, AskUserResolvedParams, ChildSessionSettledParams),
     'daemon.connection_status': ConnectionStatusParams,
     'daemon.session.archive_state_changed': z.object({
         sessionId: z.string(),

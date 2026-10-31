@@ -41,6 +41,21 @@ type loadCall struct {
 	// res is nil for daemon.initialize_session.
 	res *protocol.LoadSessionResult
 	err error
+	// askResolved (request ids the Daemon reported resolved) and
+	// queuedAnswered (tool call ids of queued sets answered here) are what
+	// happened to AskUser prompts while a load is in flight: its snapshot
+	// may predate them, and restoring from it would bring an answered set
+	// back. nil for daemon.initialize_session. Guarded by Controller.mu.
+	askResolved, queuedAnswered map[string]bool
+}
+
+// loadInFlight is the load of a Session under way, nil when none; c.mu is
+// held.
+func (c *Controller) loadInFlight(sessionID string) *loadCall {
+	if t := c.sessions[sessionID]; t != nil {
+		return t.loading
+	}
+	return nil
 }
 
 // Methods that do not need a live worker, so a call does not first load
@@ -197,18 +212,18 @@ func (c *Controller) LoadSession(ctx context.Context, p protocol.LoadSessionPara
 			continue
 		}
 		p = withStashed(p, t.params)
-		lc := &loadCall{done: make(chan struct{}), params: p}
+		lc := &loadCall{done: make(chan struct{}), params: p, askResolved: map[string]bool{}, queuedAnswered: map[string]bool{}}
 		t.loading = lc
 		cl, cred, gen := c.client, c.cred, c.gen
 		c.mu.Unlock()
 
-		lc.res, lc.err = c.load(ctx, cl, cred, gen, t, p)
+		lc.res, lc.err = c.load(ctx, cl, cred, gen, t, lc, p)
 		close(lc.done)
 		return lc.res, lc.err
 	}
 }
 
-func (c *Controller) load(ctx context.Context, cl *droid.Client, cred *droid.Credential, gen int, t *tracked, p protocol.LoadSessionParams) (*protocol.LoadSessionResult, error) {
+func (c *Controller) load(ctx context.Context, cl *droid.Client, cred *droid.Credential, gen int, t *tracked, lc *loadCall, p protocol.LoadSessionParams) (*protocol.LoadSessionResult, error) {
 	sessionID := p.SessionID
 	tok := c.store.BeginLoad(sessionID)
 	fail := func(err error) (*protocol.LoadSessionResult, error) {
@@ -258,8 +273,11 @@ func (c *Controller) load(ctx context.Context, cl *droid.Client, cred *droid.Cre
 	}
 	t.loaded, t.reload = true, false
 	c.sessions[sessionID] = t
-	out, replies := c.prompts.restore(sessionID, res, c.associated, nil)
-	pending := c.prompts.hasPending(sessionID)
+	resolved := func(requestID, toolCallID string) bool {
+		return lc.askResolved[requestID] || lc.queuedAnswered[toolCallID]
+	}
+	out, replies := c.prompts.restore(sessionID, res, c.associated, resolved, nil)
+	pending := c.prompts.waitsOnUser(sessionID)
 	c.mu.Unlock()
 	var limit int
 	if p.MessageLimit != nil {
@@ -487,8 +505,11 @@ func (c *Controller) applyNotification(sessionID string, v any, p protocol.Sessi
 	case *protocol.AgentTurnCompletedNotification:
 		out = c.prompts.failHandoff(sessionID, errNoHandoffSession, out)
 	case nil:
-		if p.Notification.Type == notificationSpecHandoffSessionCreated {
+		switch p.Notification.Type {
+		case notificationSpecHandoffSessionCreated:
 			c.onSpecHandoffCreated(sessionID, p.Notification.Raw)
+		case notificationAskUserResolved:
+			out = c.onAskUserResolved(sessionID, p.Notification.Raw, out)
 		}
 	case *protocol.DroidWorkingStateChangedNotification:
 		if v.NewState != protocol.DroidWorkingStateWaitingForToolConfirmation {
@@ -565,7 +586,8 @@ func (c *Controller) afterAddUserMessage(p protocol.AddUserMessageParams, id str
 
 // InterruptSession stops a Session's agent; its pending prompts are
 // dropped (AskUser ones answered as cancelled) and the message being
-// streamed is discarded.
+// streamed is discarded. Queued question sets stay: stopping the agent
+// neither answers nor dismisses them, and the Daemon keeps them.
 func (c *Controller) InterruptSession(ctx context.Context, sessionID string) error {
 	cl, err := c.Client()
 	if err != nil {
@@ -581,7 +603,7 @@ func (c *Controller) InterruptSession(ctx context.Context, sessionID string) err
 			out = c.prompts.dropPermission(id, "", out)
 		}
 	}
-	for _, a := range c.prompts.sessionAsks(sessionID) {
+	for _, a := range c.prompts.blockingAsks(sessionID) {
 		out = c.prompts.dropAskUser(a.RequestID, &protocol.AskUserResult{Cancelled: ptr(true), Answers: []protocol.AskUserCollectedAnswer{}}, out)
 	}
 	c.mu.Unlock()

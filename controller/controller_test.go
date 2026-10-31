@@ -175,6 +175,87 @@ func TestAskUserTurn(t *testing.T) {
 	}
 }
 
+func TestQueuedAskUserTurn(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+		Turn: &fakedaemon.Turn{
+			Kind: "queuedAskUser", Question: "Which database?", Options: []string{"Postgres", "SQLite"},
+			Context: "The models look the same either way; I write them meanwhile.", Reply: "Writing the models meanwhile.",
+		},
+	})
+	c, r := start(t, d, controller.Config{})
+	other, ro := start(t, d, controller.Config{})
+	ctx := context.Background()
+	id := d.Sessions[0].SessionID
+	for _, cl := range []*controller.Controller{c, other} {
+		if _, err := cl.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	var states []protocol.DroidWorkingState
+	c.Store().Subscribe(func(e session.Event) {
+		if e.Kind == session.EventWorkingStateChanged && e.SessionID == id {
+			mu.Lock()
+			states = append(states, c.Store().Session(id).WorkingState())
+			mu.Unlock()
+		}
+	})
+	if _, err := c.AddUserMessage(ctx, protocol.AddUserMessageParams{SessionID: id, Text: "Set up storage"}); err != nil {
+		t.Fatal(err)
+	}
+	e, next := r.wait(t, 0, "AskUser requested", func(e controller.Event) bool { _, ok := e.(controller.AskUserRequested); return ok })
+	a := e.(controller.AskUserRequested).AskUser
+	if !a.Queued || a.Context != "The models look the same either way; I write them meanwhile." {
+		t.Fatalf("asked %+v", a)
+	}
+	_, onext := ro.wait(t, 0, "the other Client asked too", func(e controller.Event) bool { _, ok := e.(controller.AskUserRequested); return ok })
+
+	// The agent goes on and its turn ends; the question stays.
+	_, next = r.wait(t, next, "turn end", turnEnded)
+	r.wait(t, next-1, "idle", func(controller.Event) bool {
+		return c.Store().Session(id).WorkingState() == protocol.DroidWorkingStateIdle
+	})
+	mu.Lock()
+	for _, ws := range states {
+		if ws == protocol.DroidWorkingStateWaitingForToolConfirmation {
+			t.Fatalf("the Session waited on a queued set: %v", states)
+		}
+	}
+	mu.Unlock()
+	if got := c.PendingAskUsers(id); len(got) != 1 || got[0].RequestID != a.RequestID {
+		t.Fatalf("pending after the turn: %+v", got)
+	}
+	// Stopping the agent neither answers the set nor drops it.
+	if err := c.InterruptSession(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.PendingAskUsers(id)) != 1 {
+		t.Fatal("Esc dropped a queued set")
+	}
+
+	q := a.Questions[0]
+	if err := c.RespondToAskUser(ctx, a.RequestID, protocol.AskUserResult{Answers: []protocol.AskUserCollectedAnswer{{Index: q.Index, Question: q.Question, Answer: "SQLite"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.PendingAskUsers(id)) != 0 {
+		t.Fatal("answered set still pending")
+	}
+	// The other Client hears it was resolved.
+	ro.wait(t, onext, "resolved on the other Client", func(e controller.Event) bool {
+		res, ok := e.(controller.AskUserResolved)
+		return ok && res.RequestID == a.RequestID
+	})
+	if len(other.PendingAskUsers(id)) != 0 {
+		t.Fatal("the other Client still shows the set")
+	}
+	// The record starts a turn that reads the answer.
+	r.wait(t, next, "the record's turn", turnEnded)
+	if got := streamedText(r); !strings.Contains(got, "Noted: SQLite.") {
+		t.Fatalf("streamed %q", got)
+	}
+}
+
 func TestReconnectLoadsSessionsAgain(t *testing.T) {
 	d := fakedaemon.Start(t, fakedaemon.Scenario{
 		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},

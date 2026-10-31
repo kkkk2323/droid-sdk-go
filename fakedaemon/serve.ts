@@ -9,6 +9,7 @@ import {
   streamedReply,
   permissionTurn,
   askUserTurn,
+  queuedAskUserTurn,
   todoTurn,
   structuredTurn,
   specTurn,
@@ -32,6 +33,7 @@ type TurnSpec =
   | { kind: 'reply'; deltas: string[]; delayMs?: number }
   | { kind: 'permission'; command: string; reply: string; toolOutput?: string }
   | { kind: 'askUser'; question: string; options: string[]; multiSelect?: boolean }
+  | { kind: 'queuedAskUser'; question: string; options: string[]; context: string; reply: string }
   | {
       kind: 'todo'
       todos: Array<{ id: string; content: string; status: 'pending' | 'in_progress' | 'completed' }>
@@ -60,6 +62,8 @@ function turnHandler(turn: TurnSpec | undefined) {
       return permissionTurn(turn)
     case 'askUser':
       return askUserTurn(turn)
+    case 'queuedAskUser':
+      return queuedAskUserTurn(turn)
     case 'todo':
       return todoTurn(turn)
     case 'structured':

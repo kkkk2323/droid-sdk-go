@@ -14,6 +14,8 @@ var options = []protocol.ToolConfirmationListItem{{Label: "Yes", Value: protocol
 
 func noParents(s string, extra []string) []string { return append([]string{s}, extra...) }
 
+func noneResolved(string, string) bool { return false }
+
 func TestRestoreReplaysAnswerKeptWhileInactive(t *testing.T) {
 	p := newPrompts()
 	p.addPermission(&Permission{RequestID: "r1", SessionID: "s", AssociatedSessionIDs: []string{"s"}, ToolUses: toolUse("tu1"), Options: options}, nil)
@@ -34,7 +36,7 @@ func TestRestoreReplaysAnswerKeptWhileInactive(t *testing.T) {
 		},
 		PendingAskUserRequests: []protocol.LoadSessionResultPendingAskUserRequestsItem{{RequestID: "a1", ToolCallID: "tc1"}},
 	}
-	out, replies := p.restore("s", res, noParents, nil)
+	out, replies := p.restore("s", res, noParents, noneResolved, nil)
 	if len(replies) != 1 || replies[0].id != "r2" {
 		t.Fatalf("replies: %+v", replies)
 	}
@@ -72,7 +74,7 @@ func TestRestoreDropsPromptsTheDaemonNoLongerHas(t *testing.T) {
 	p.addPermission(&Permission{RequestID: "r1", SessionID: "s", AssociatedSessionIDs: []string{"s"}, ToolUses: toolUse("tu1"), Options: options}, nil)
 	// A child's permission relayed to its parent is not the parent's load's to drop.
 	p.addPermission(&Permission{RequestID: "r9", SessionID: "s", AssociatedSessionIDs: []string{"s", "parent"}, ToolUses: toolUse("tu9"), Options: options}, nil)
-	out, _ := p.restore("s", &protocol.LoadSessionResult{}, noParents, nil)
+	out, _ := p.restore("s", &protocol.LoadSessionResult{}, noParents, noneResolved, nil)
 	if _, ok := p.perms["r1"]; ok {
 		t.Fatal("stale permission kept")
 	}
@@ -124,5 +126,64 @@ func TestRepeatedToolUseReplacesPermission(t *testing.T) {
 	}
 	if got := p.perms["r2"].AssociatedSessionIDs; len(got) != 2 {
 		t.Fatalf("associated sessions not merged: %v", got)
+	}
+}
+
+func TestQueuedQuestionSetsOutliveTheTurn(t *testing.T) {
+	p := newPrompts()
+	p.addAskUser(&AskUser{RequestID: "q1", SessionID: "s", ToolCallID: "tq", Queued: true}, nil)
+	if p.waitsOnUser("s") {
+		t.Fatal("a queued set alone makes the agent wait")
+	}
+	p.addAskUser(&AskUser{RequestID: "a1", SessionID: "s", ToolCallID: "ta"}, nil)
+	if !p.waitsOnUser("s") {
+		t.Fatal("a blocking AskUser does not make the agent wait")
+	}
+	// The agent moves on: the blocking one is stale, the queued one is not.
+	out := p.clearStale("s", nil)
+	if _, ok := p.asks["a1"]; ok || len(out) != 1 {
+		t.Fatalf("stale blocking AskUser kept: %+v", out)
+	}
+	if _, ok := p.asks["q1"]; !ok {
+		t.Fatal("queued set dropped as stale")
+	}
+	// The Session closes: everything goes.
+	p.forgetSession("s", nil)
+	if len(p.asks) != 0 {
+		t.Fatal("queued set kept after the Session closed")
+	}
+}
+
+func TestRestoreSkipsAskUserResolvedDuringTheLoad(t *testing.T) {
+	p := newPrompts()
+	p.addAskUser(&AskUser{RequestID: "q1", SessionID: "s", ToolCallID: "tq1", Queued: true}, nil)
+	res := &protocol.LoadSessionResult{
+		PendingAskUserRequests: []protocol.LoadSessionResultPendingAskUserRequestsItem{
+			{RequestID: "q1", ToolCallID: "tq1", Blocking: ptr(false)},
+			{RequestID: "q2", ToolCallID: "tq2", Blocking: ptr(false), Context: "Which database?"},
+			{RequestID: "q3", ToolCallID: "tq3", Blocking: ptr(false)},
+		},
+	}
+	// q1 was answered here and q3 on another Client while the load ran.
+	resolved := func(requestID, toolCallID string) bool { return toolCallID == "tq1" || requestID == "q3" }
+	out, _ := p.restore("s", res, noParents, resolved, nil)
+	if _, ok := p.asks["q1"]; ok {
+		t.Fatal("set answered during the load restored")
+	}
+	if _, ok := p.asks["q3"]; ok {
+		t.Fatal("set resolved elsewhere during the load restored")
+	}
+	q2 := p.asks["q2"]
+	if q2 == nil || !q2.Queued || q2.Context != "Which database?" || !q2.Restored {
+		t.Fatalf("queued set restored as %+v", q2)
+	}
+	var resolvedIDs []string
+	for _, e := range out {
+		if r, ok := e.(AskUserResolved); ok {
+			resolvedIDs = append(resolvedIDs, r.RequestID)
+		}
+	}
+	if len(resolvedIDs) != 1 || resolvedIDs[0] != "q1" {
+		t.Fatalf("resolved %v", resolvedIDs)
 	}
 }

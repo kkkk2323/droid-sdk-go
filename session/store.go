@@ -424,6 +424,9 @@ func (s *Store) HandleNotification(p protocol.SessionNotificationParams, opts Ha
 	if !valid(p.SessionID) {
 		return errors.New("session: notification without a session id")
 	}
+	if p.Notification.Type == notificationChildSessionSettled {
+		return s.handleChildSessionSettled(p.Notification.Raw)
+	}
 	v, err := p.Notification.Value()
 	if err != nil {
 		return fmt.Errorf("session: decode %s notification: %w", p.Notification.Type, err)

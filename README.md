@@ -100,6 +100,20 @@ store subscriber must not block.
   (`spec_handoff_session_created`, newer than the 0.9.1 schemas) and the
   Client loads it and sends the plan: `PermissionAnswer.ClientStartsHandoffSession`,
   reported by `SpecHandoffStarted` or `SpecHandoffFailed`.
+- Queued AskUser (droid 1.1): `daemon.ask_user` with `blocking: false` and
+  a `context` queues a question set; the agent keeps working. The
+  Controller marks it `AskUser.Queued`: it does not put the Session in
+  waiting, survives the turn ending or `InterruptSession`, and goes when it
+  is answered or the Daemon sends `ask_user_resolved` (another Client
+  answered, or the set was asked again under a new id). Answers come back
+  to the agent as a user message with id `ask-user-answer:<toolCallId>`,
+  after a user-only system receipt `ask-user-receipt:<toolCallId>` that
+  renderers skip.
+- `child_session_settled` (droid 1.1) on a parent Session settles a Task
+  child the Client may not reach (another computer): the store sets the
+  child's summary status and its working state to idle.
+- `behavesLikeModelId` on a custom model (droid 1.1) names the built-in
+  model it behaves like.
 
 ## Fake Daemon
 
@@ -113,7 +127,7 @@ instead of running an agent, and checks every message it sends with
 - **Go:** `fakedaemon.Start(t, scenario)` runs it in Node and gives its URL.
   The package embeds the Fake Daemon bundled into one script
   (`fakedaemon/fake-daemon.mjs`), so a test needs only `node` on PATH.
-  `fakedaemon.Turn` scripts the agent: a reply, a permission, AskUser, a
+  `fakedaemon.Turn` scripts the agent: a reply, a permission, AskUser (blocking or queued), a
   todo list, structured output, or `spec` (ExitSpecMode and its handoff, as
   droid 0.244 does them).
 - **TypeScript:** the npm package `@droi/fake-daemon` (`fake-daemon/`, with its
@@ -160,8 +174,10 @@ gen/generate.sh 0.10.0 && go build ./... && go test -race ./...
 
 `generate.sh` installs that release from npm, pulls the zod schemas and the
 DaemonClient method table out of its bundle, and rewrites `protocol/` and
-`zz_client_methods.go` (same version in, same bytes out). The compiler then
-points at the hand-written code that uses what changed.
+`zz_client_methods.go` (same version in, same bytes out). Fields a newer
+`droid` sends that the release lacks are listed in `gen/gen.mjs`'s
+`NEWER_FIELDS`; generation fails once a release has one of them itself.
+The compiler then points at the hand-written code that uses what changed.
 
 Measured on 0.8.0 → 0.9.1: 11 types added or renamed, ~500 changed lines of
 generated code, the same 132 methods, and 6 compile errors, all in `session`

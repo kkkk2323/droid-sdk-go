@@ -59,6 +59,23 @@ export interface AskUserTurnOptions {
 }
 /** Handler for `daemon.add_user_message` where the agent asks the user a question first. */
 export declare function askUserTurn(options: AskUserTurnOptions): MethodHandler;
+export interface QueuedAskUserTurnOptions {
+    question: string;
+    options: string[];
+    /** The set's explanation the Client shows above its question. */
+    context: string;
+    /** What the agent streams while the question waits. */
+    reply: string;
+}
+/**
+ * Handler for `daemon.add_user_message` where the agent queues a question
+ * (droid 1.1's AskUser with `blocking: false`) and keeps working: the tool
+ * returns at once and the turn ends with `reply`. When a Client answers, the
+ * Daemon saves a user-only receipt, reports the set resolved to every Client
+ * (`ask_user_resolved`), and gives the agent the record as a user message
+ * that starts a turn, as droid 1.1 does.
+ */
+export declare function queuedAskUserTurn(options: QueuedAskUserTurnOptions): MethodHandler;
 export interface TodoTurnOptions {
     todos: Array<{
         id: string;

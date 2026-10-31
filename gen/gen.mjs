@@ -316,6 +316,23 @@ function comment(text, indent = '') {
     .join('')
 }
 
+// Fields droid's Daemon sends that the @factory/droid-sdk release the types
+// come from does not have yet. Kept here so that regenerating keeps them; a
+// release that adds one makes its entry here a duplicate, which gen fails on.
+const NEWER_FIELDS = {
+  AskUserParams: [
+    ['blocking', '*bool', 'False for a queued question set (droid 1.1): the agent keeps working and the answers reach it later. Absent means blocking.'],
+    ['context', 'string', "A queued question set's self-contained explanation (droid 1.1), shown above its questions."],
+  ],
+  LoadSessionResultPendingAskUserRequestsItem: [
+    ['blocking', '*bool', 'False for a queued question set (droid 1.1). Absent means blocking.'],
+    ['context', 'string', "A queued question set's explanation (droid 1.1)."],
+  ],
+  ModelMetadata: [
+    ['behavesLikeModelId', 'string', "For a custom model, the built-in model whose behavior it inherits (droid 1.1): its baseModelId, else the closest built-in to its upstream model id. Absent when nothing matches, and from older Daemons."],
+  ],
+}
+
 function emitStruct(s, shape = shapeOf(s)) {
   const name = nameOf.get(s)
   {
@@ -333,6 +350,12 @@ function emitStruct(s, shape = shapeOf(s)) {
       if (ptr) ty = '*' + ty
       const tag = optional || nullable ? `json:"${key},omitempty"` : `json:"${key}"`
       lines.push(comment(describe(field) || describe(base), '\t') + `\t${f} ${ty} \`${tag}\``)
+    }
+    for (const [key, ty, doc] of NEWER_FIELDS[name] ?? []) {
+      const f = goField(key)
+      if (used.has(f)) throw new Error(`${name}.${key} is in the schemas now: drop it from NEWER_FIELDS`)
+      used.add(f)
+      lines.push(comment(doc, '\t') + `\t${f} ${ty} \`json:"${key},omitempty"\``)
     }
     return `${comment(describe(s))}type ${name} struct {\n${lines.join('\n')}\n}\n`
   }

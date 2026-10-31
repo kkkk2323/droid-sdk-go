@@ -32,6 +32,14 @@ type AskUser struct {
 	SessionID  string
 	ToolCallID string
 	Questions  []protocol.AskUserQuestion
+	// Queued: a queued question set (droid 1.1, AskUser with blocking
+	// false). The agent keeps working past it and gets the answers at a
+	// later turn, so nothing waits on it: it does not put the Session in
+	// waiting, and it stays while the turn goes on or is stopped, until it
+	// is answered or the Daemon reports it resolved.
+	Queued bool
+	// Context is a queued set's explanation, shown above its questions.
+	Context    string
 	Restored   bool
 	ReceivedAt time.Time
 }
@@ -154,8 +162,22 @@ func (p *prompts) sessionAsks(sessionID string) []*AskUser {
 	return out
 }
 
-func (p *prompts) hasPending(sessionID string) bool {
-	return len(p.sessionPermissions(sessionID)) > 0 || len(p.sessionAsks(sessionID)) > 0
+// blockingAsks are a Session's AskUser prompts the agent waits on: all but
+// the queued question sets.
+func (p *prompts) blockingAsks(sessionID string) []*AskUser {
+	var out []*AskUser
+	for _, a := range p.asks {
+		if a.SessionID == sessionID && !a.Queued {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// waitsOnUser reports that the Session's agent waits for an answer: a
+// permission or an AskUser prompt other than a queued question set.
+func (p *prompts) waitsOnUser(sessionID string) bool {
+	return len(p.sessionPermissions(sessionID)) > 0 || len(p.blockingAsks(sessionID)) > 0
 }
 
 // addPermission records a permission; a repeat of a pending one only
@@ -200,7 +222,7 @@ func (p *prompts) dropPermission(id string, option protocol.ToolConfirmationOutc
 	}
 	delete(p.perms, id)
 	for _, s := range perm.AssociatedSessionIDs {
-		if p.concurrent[s] && !p.hasPending(s) {
+		if p.concurrent[s] && !p.waitsOnUser(s) {
 			delete(p.concurrent, s)
 		}
 	}
@@ -231,8 +253,9 @@ func (p *prompts) dropAskUser(id string, result *protocol.AskUserResult, out []E
 }
 
 // clearSession drops a Session's prompts; with keepRelayed, permissions
-// also shown on other Sessions stay.
-func (p *prompts) clearSession(sessionID string, keepRelayed bool, out []Event) []Event {
+// also shown on other Sessions stay, and with keepQueued, queued question
+// sets.
+func (p *prompts) clearSession(sessionID string, keepRelayed, keepQueued bool, out []Event) []Event {
 	for id, perm := range p.perms {
 		if perm.SessionID != sessionID {
 			continue
@@ -243,6 +266,9 @@ func (p *prompts) clearSession(sessionID string, keepRelayed bool, out []Event) 
 		out = p.dropPermission(id, "", out)
 	}
 	for _, a := range p.sessionAsks(sessionID) {
+		if keepQueued && a.Queued {
+			continue
+		}
 		out = p.dropAskUser(a.RequestID, nil, out)
 	}
 	delete(p.concurrent, sessionID)
@@ -250,7 +276,7 @@ func (p *prompts) clearSession(sessionID string, keepRelayed bool, out []Event) 
 }
 
 func (p *prompts) forgetSession(sessionID string, out []Event) []Event {
-	out = p.clearSession(sessionID, false, out)
+	out = p.clearSession(sessionID, false, false, out)
 	for id, b := range p.bufPerm {
 		if b.sessionID == sessionID {
 			delete(p.bufPerm, id)
@@ -274,12 +300,13 @@ func (p *prompts) markPromptSessionsInactive() {
 
 // clearStale drops the prompt of a Session whose agent moved on without it
 // being answered here. With several prompts out at once, one being answered
-// says nothing of the others, so they stay.
+// says nothing of the others, so they stay. A queued question set is never
+// stale: the agent moves on past it by design.
 func (p *prompts) clearStale(sessionID string, out []Event) []Event {
 	if p.inactive[sessionID] {
 		return out
 	}
-	perms, asks := len(p.sessionPermissions(sessionID)), len(p.sessionAsks(sessionID))
+	perms, asks := len(p.sessionPermissions(sessionID)), len(p.blockingAsks(sessionID))
 	switch {
 	case perms == 0 && asks == 0:
 		delete(p.concurrent, sessionID)
@@ -287,22 +314,25 @@ func (p *prompts) clearStale(sessionID string, out []Event) []Event {
 		p.concurrent[sessionID] = true
 	case p.concurrent[sessionID]:
 	default:
-		out = p.clearSession(sessionID, true, out)
+		out = p.clearSession(sessionID, true, true, out)
 	}
 	return out
 }
 
 // restore replaces a Session's prompts with those daemon.load_session
 // returned, answering at once the ones answered while the Session was
-// inactive.
-func (p *prompts) restore(sessionID string, res *protocol.LoadSessionResult, assoc func(string, []string) []string, out []Event) ([]Event, []reply) {
+// inactive. resolved tells AskUser prompts resolved while the load was in
+// flight, which its snapshot may still hold.
+func (p *prompts) restore(sessionID string, res *protocol.LoadSessionResult, assoc func(string, []string) []string, resolved func(requestID, toolCallID string) bool, out []Event) ([]Event, []reply) {
 	var replies []reply
 	keep := map[string]bool{}
 	for _, pp := range res.PendingPermissions {
 		keep[pp.RequestID] = true
 	}
 	for _, pa := range res.PendingAskUserRequests {
-		keep[pa.RequestID] = true
+		if !resolved(pa.RequestID, pa.ToolCallID) {
+			keep[pa.RequestID] = true
+		}
 	}
 	for id, perm := range p.perms {
 		if perm.SessionID == sessionID && !keep[id] && !slices.ContainsFunc(perm.AssociatedSessionIDs, func(s string) bool { return s != sessionID }) {
@@ -333,6 +363,9 @@ func (p *prompts) restore(sessionID string, res *protocol.LoadSessionResult, ass
 		}, out)
 	}
 	for _, pa := range res.PendingAskUserRequests {
+		if !keep[pa.RequestID] {
+			continue
+		}
 		if r, ok := p.bufAsk[sessionID][pa.ToolCallID]; ok {
 			delete(p.bufAsk[sessionID], pa.ToolCallID)
 			out = p.dropAskUser(pa.RequestID, &r, out)
@@ -344,6 +377,8 @@ func (p *prompts) restore(sessionID string, res *protocol.LoadSessionResult, ass
 			SessionID:  sessionID,
 			ToolCallID: pa.ToolCallID,
 			Questions:  pa.Questions,
+			Queued:     isQueued(pa.Blocking),
+			Context:    pa.Context,
 			Restored:   true,
 			ReceivedAt: now,
 		}, out)
@@ -420,6 +455,7 @@ func (c *Controller) onAskUserRequest(gen int, r droid.Request) {
 		c.log.Warn("droid: undecodable AskUser request", "err", err)
 		return
 	}
+	queued := isQueued(p.Blocking)
 	var out []Event
 	var replies []reply
 	c.mu.Lock()
@@ -432,11 +468,18 @@ func (c *Controller) onAskUserRequest(gen int, r droid.Request) {
 			SessionID:  p.SessionID,
 			ToolCallID: p.ToolCallID,
 			Questions:  p.Questions,
+			Queued:     queued,
+			Context:    p.Context,
 			ReceivedAt: time.Now(),
 		}, out)
+		// The worker asks again a queued set whose answer it failed to
+		// record: answered here or not, it is open again.
+		if lc := c.loadInFlight(p.SessionID); lc != nil {
+			delete(lc.queuedAnswered, p.ToolCallID)
+		}
 	}
 	c.mu.Unlock()
-	if len(replies) == 0 {
+	if len(replies) == 0 && !queued {
 		if s := c.store.Session(p.SessionID); s != nil {
 			s.SetWorkingState(protocol.DroidWorkingStateWaitingForToolConfirmation)
 		}
@@ -569,7 +612,7 @@ func (c *Controller) RespondToAskUser(ctx context.Context, requestID string, r p
 		c.mu.Unlock()
 		return err
 	}
-	sessionID, toolCallID := a.SessionID, a.ToolCallID
+	sessionID, toolCallID, queued := a.SessionID, a.ToolCallID, a.Queued
 	buffer := func() []Event {
 		if c.prompts.bufAsk[sessionID] == nil {
 			c.prompts.bufAsk[sessionID] = map[string]protocol.AskUserResult{}
@@ -599,6 +642,11 @@ func (c *Controller) RespondToAskUser(ctx context.Context, requestID string, r p
 		return nil
 	}
 	c.mu.Lock()
+	if queued {
+		if lc := c.loadInFlight(sessionID); lc != nil && lc.queuedAnswered != nil {
+			lc.queuedAnswered[toolCallID] = true
+		}
+	}
 	out := c.prompts.dropAskUser(requestID, &r, nil)
 	c.mu.Unlock()
 	c.push(out)

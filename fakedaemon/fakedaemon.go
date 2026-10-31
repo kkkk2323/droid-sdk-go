@@ -51,7 +51,10 @@ type Message struct {
 
 // Turn is how the agent answers daemon.add_user_message: Kind is "reply"
 // (Deltas streamed), "permission" (asks to run Command, then Reply),
-// "askUser" (Question with Options), "todo", "structured" (a Memory
+// "askUser" (Question with Options), "queuedAskUser" (droid 1.1's queued
+// question: Question with Options and Context asked without waiting, Reply
+// streamed meanwhile; an answer is saved as a receipt, reported resolved
+// with ask_user_resolved, and starts a turn on its record), "todo", "structured" (a Memory
 // Session's turn, ending with Structured as its structured output), or
 // "spec" (in a Session in Spec mode, presents Plan titled Title with
 // ExitSpecMode and acts on the answer as droid 0.244 does, streaming Reply
@@ -69,6 +72,7 @@ type Turn struct {
 	Question    string         `json:"question,omitempty"`
 	Options     []string       `json:"options,omitempty"`
 	MultiSelect bool           `json:"multiSelect,omitempty"`
+	Context     string         `json:"context,omitempty"`
 	Todos       []Todo         `json:"todos,omitempty"`
 	Structured  map[string]any `json:"structured,omitempty"`
 	Plan        string         `json:"plan,omitempty"`

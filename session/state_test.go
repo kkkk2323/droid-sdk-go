@@ -386,6 +386,39 @@ func TestChildSessionAvailableAndSubagentSummary(t *testing.T) {
 	}
 }
 
+func TestChildSessionSettledEndsASubagentFromItsParent(t *testing.T) {
+	s, _ := newTestStore()
+	const parent, child = "p", "c"
+	loadWith(t, s, parent, protocol.LoadSessionResult{Cwd: "/repo"})
+	send(t, s, parent, map[string]any{
+		"type": "child_session_available", "childSessionId": child, "toolUseId": "task2",
+		"subagentType": "worker", "description": "Run the tests", "timestamp": 1,
+	})
+	c := s.Session(child)
+	if c == nil || c.WorkingState() == protocol.DroidWorkingStateIdle {
+		t.Fatal("child not shown working")
+	}
+	rev := c.WorkingStateRevision()
+	// An earlier Task of the same child settles: not this run's end.
+	send(t, s, parent, map[string]any{"type": "child_session_settled", "childSessionId": child, "toolUseId": "task1", "status": "completed", "timestamp": 2})
+	if c.WorkingState() == protocol.DroidWorkingStateIdle {
+		t.Fatal("a settle for an earlier Task stopped the child")
+	}
+	// The child runs on another computer: only its parent says it ended.
+	send(t, s, parent, map[string]any{"type": "child_session_settled", "childSessionId": child, "toolUseId": "task2", "status": "cancelled", "timestamp": 3})
+	if c.WorkingState() != protocol.DroidWorkingStateIdle || c.WorkingStateRevision() == rev {
+		t.Fatalf("child %s, revision %d", c.WorkingState(), c.WorkingStateRevision())
+	}
+	if sum, _ := s.SubagentInvocationSummary(child); sum.Status != protocol.TaskInvocationStatusCancelled {
+		t.Fatalf("summary %+v", sum)
+	}
+	// A status this reader does not know is a failure, not a success.
+	send(t, s, parent, map[string]any{"type": "child_session_settled", "childSessionId": child, "toolUseId": "task2", "status": "archived", "timestamp": 4})
+	if sum, _ := s.SubagentInvocationSummary(child); sum.Status != protocol.TaskInvocationStatusFailed {
+		t.Fatalf("unknown status read as %s", sum.Status)
+	}
+}
+
 func TestRepairParentChain(t *testing.T) {
 	out := repairParentChain([]protocol.FactoryDroidMessage{
 		msg("a", roleUser, "", 1, "c"),

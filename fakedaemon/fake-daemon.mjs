@@ -38177,6 +38177,23 @@ var SpecHandoffSessionCreatedParams = external_exports2.object({
     timestamp: external_exports2.number()
   })
 });
+var AskUserResolvedParams = external_exports2.object({
+  sessionId: external_exports2.string(),
+  notification: external_exports2.object({
+    type: external_exports2.literal("ask_user_resolved"),
+    requestIds: external_exports2.array(external_exports2.string())
+  })
+});
+var ChildSessionSettledParams = external_exports2.object({
+  sessionId: external_exports2.string(),
+  notification: external_exports2.object({
+    type: external_exports2.literal("child_session_settled"),
+    childSessionId: external_exports2.string(),
+    toolUseId: external_exports2.string().optional(),
+    status: external_exports2.string(),
+    timestamp: external_exports2.number()
+  })
+});
 function either(first, ...rest) {
   return {
     safeParse(value) {
@@ -38190,7 +38207,9 @@ var NOTIFICATION_SCHEMAS = {
   "daemon.session_notification": either(
     SessionNotificationParamsSchema2,
     SessionInactivityParams,
-    SpecHandoffSessionCreatedParams
+    SpecHandoffSessionCreatedParams,
+    AskUserResolvedParams,
+    ChildSessionSettledParams
   ),
   "daemon.connection_status": ConnectionStatusParams,
   "daemon.session.archive_state_changed": external_exports2.object({
@@ -39943,6 +39962,89 @@ function askUserTurn(options) {
     return {};
   };
 }
+function queuedAskUserTurn(options) {
+  return (params, context, request) => {
+    const sessionId = String(params["sessionId"]);
+    const daemon2 = context.daemon;
+    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID5();
+    void (async () => {
+      startTurn(daemon2, sessionId, userMessageId, String(params["text"]), String(request.id));
+      const toolUseId = `call_${randomUUID5().slice(0, 8)}`;
+      daemon2.notify(sessionId, {
+        type: "tool_call",
+        toolUse: {
+          type: "tool_use",
+          id: toolUseId,
+          name: "AskUser",
+          input: { blocking: false, context: options.context }
+        }
+      });
+      const question = options.question;
+      const asked = daemon2.request("daemon.ask_user", {
+        sessionId,
+        toolCallId: toolUseId,
+        questions: [{ index: 1, topic: "Choice", question, options: options.options }],
+        blocking: false,
+        context: options.context
+      });
+      daemon2.notify(sessionId, {
+        type: "tool_result",
+        toolUseId,
+        content: "Queued. The user's answers will arrive later as a user message naming this AskUser call; keep working.",
+        isError: false,
+        messageId: randomUUID5()
+      });
+      await streamText(daemon2, sessionId, options.reply);
+      finishTurn(daemon2, sessionId, userMessageId, "completed");
+      const response = await asked.answer;
+      const result = response["result"];
+      const dismissed = result?.["cancelled"] === true;
+      const answers = result?.["answers"] ?? [];
+      const call = `(AskUser call ${toolUseId})`;
+      const record3 = dismissed ? `Dismissed queued questions ${call}: the user closed them without answering; their answers will not arrive.
+Q: ${JSON.stringify(question)}` : `Answered queued questions ${call}:
+Q: ${JSON.stringify(question)}
+A: ${JSON.stringify(answers.map((a) => a.answer).join(", "))}`;
+      const now = Date.now();
+      const text = [{ type: "text", text: record3 }];
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: {
+          id: `ask-user-receipt:${toolUseId}`,
+          role: "system",
+          visibility: "user_only",
+          content: text,
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+      daemon2.notify(sessionId, { type: "ask_user_resolved", requestIds: [asked.id] });
+      daemon2.notify(sessionId, {
+        type: "droid_working_state_changed",
+        newState: "streaming_assistant_message"
+      });
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: {
+          id: `ask-user-answer:${toolUseId}`,
+          role: "user",
+          visibility: "both",
+          content: text,
+          createdAt: now + 1,
+          updatedAt: now + 1
+        }
+      });
+      daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "thinking" });
+      await streamText(
+        daemon2,
+        sessionId,
+        dismissed ? "Understood, I will decide myself." : `Noted: ${answers.map((a) => a.answer).join(", ")}.`
+      );
+      finishTurn(daemon2, sessionId, `ask-user-answer:${toolUseId}`, "completed");
+    })();
+    return {};
+  };
+}
 function startTurn(daemon2, sessionId, userMessageId, text, requestId) {
   const now = Date.now();
   daemon2.notify(sessionId, {
@@ -40282,6 +40384,8 @@ function turnHandler(turn) {
       return permissionTurn(turn);
     case "askUser":
       return askUserTurn(turn);
+    case "queuedAskUser":
+      return queuedAskUserTurn(turn);
     case "todo":
       return todoTurn(turn);
     case "structured":
