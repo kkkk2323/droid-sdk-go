@@ -259,7 +259,7 @@ func TestLiveController(t *testing.T) {
 	t.Run("methods", func(t *testing.T) {
 		c := cl()
 		must(c.UpdateSessionSettings(ctx, protocol.UpdateSessionSettingsParams{SessionID: id, ReasoningEffort: protocol.ReasoningEffortLow}))(t)
-		defaults := must(c.GetDefaultSettings(ctx))(t)
+		defaults := must(c.GetDefaultSettings(ctx, protocol.GetDefaultSettingsParams{}))(t)
 		t.Logf("defaults: model %q, %d models", defaults.ModelID, len(defaults.AvailableModels))
 		must(c.RenameSession(ctx, protocol.RenameSessionParams{SessionID: id, Title: "Go SDK live check"}))(t)
 		listed := must(c.ListAvailableSessions(ctx, protocol.ListAvailableSessionsParams{Limit: ptr(10.0)}))(t)

@@ -114,25 +114,18 @@ func firstToolUseID(tu []protocol.ToolConfirmationInfo) string {
 	return tu[0].ToolUse.ID
 }
 
-// permissionResponseWire adds the fields of a client-started spec handoff,
-// newer than the generated schemas.
-type permissionResponseWire struct {
-	protocol.RequestPermissionResponse
-	ClientStartsHandoffSession bool   `json:"clientStartsHandoffSession,omitempty"`
-	SpecHandoffID              string `json:"specHandoffId,omitempty"`
-}
-
-func permissionResponse(sessionID string, a PermissionAnswer, specHandoffID string) permissionResponseWire {
-	return permissionResponseWire{
-		RequestPermissionResponse: protocol.RequestPermissionResponse{
-			SessionID:         sessionID,
-			SelectedOption:    a.SelectedOption,
-			Comment:           a.Comment,
-			EditedSpecContent: a.EditedSpecContent,
-		},
-		ClientStartsHandoffSession: a.ClientStartsHandoffSession,
-		SpecHandoffID:              specHandoffID,
+func permissionResponse(sessionID string, a PermissionAnswer, specHandoffID string) protocol.RequestPermissionResponse {
+	r := protocol.RequestPermissionResponse{
+		SessionID:         sessionID,
+		SelectedOption:    a.SelectedOption,
+		Comment:           a.Comment,
+		EditedSpecContent: a.EditedSpecContent,
+		SpecHandoffID:     specHandoffID,
 	}
+	if a.ClientStartsHandoffSession {
+		r.ClientStartsHandoffSession = ptr(true)
+	}
+	return r
 }
 
 func askUserResponse(sessionID string, r protocol.AskUserResult) protocol.AskUserResponse {

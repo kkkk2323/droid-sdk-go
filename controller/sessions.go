@@ -504,11 +504,10 @@ func (c *Controller) applyNotification(sessionID string, v any, p protocol.Sessi
 		delete(c.sessions, sessionID)
 	case *protocol.AgentTurnCompletedNotification:
 		out = c.prompts.failHandoff(sessionID, errNoHandoffSession, out)
+	case *protocol.SpecHandoffSessionCreatedNotification:
+		c.onSpecHandoffCreated(sessionID, *v)
 	case nil:
-		switch p.Notification.Type {
-		case notificationSpecHandoffSessionCreated:
-			c.onSpecHandoffCreated(sessionID, p.Notification.Raw)
-		case notificationAskUserResolved:
+		if p.Notification.Type == notificationAskUserResolved {
 			out = c.onAskUserResolved(sessionID, p.Notification.Raw, out)
 		}
 	case *protocol.DroidWorkingStateChangedNotification:

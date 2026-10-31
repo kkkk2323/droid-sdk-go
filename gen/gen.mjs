@@ -331,7 +331,64 @@ const NEWER_FIELDS = {
   ModelMetadata: [
     ['behavesLikeModelId', 'string', "For a custom model, the built-in model whose behavior it inherits (droid 1.1): its baseModelId, else the closest built-in to its upstream model id. Absent when nothing matches, and from older Daemons."],
   ],
+  DroidWorkingStateChangedNotification: [
+    ['backgroundWork', '*int64', 'Sent when the Session goes idle (droid 1.0): the background work it still waits on (background commands, Script runs, subagent results still owed), any of which wakes it later. Absent from older Daemons.'],
+  ],
+  LoadSessionResult: [
+    ['backgroundWork', '*int64', 'The background work the Session waits on at load time, as droid_working_state_changed reports it (droid 1.0).'],
+    ['backgroundProcesses', '*SessionBackgroundProcessesSnapshot', 'The background processes the Session tracks at load time (droid 1.0). Absent from older Daemons, which also do not handle daemon.kill_background_process.'],
+  ],
 }
+
+// Types and methods of droid's Daemon that the release lacks, named as the
+// generator would name them from droid's own schemas. A release that has
+// one makes it a duplicate, which gen fails on.
+const NEWER_TYPES = {
+  SessionBackgroundProcess: `// SessionBackgroundProcess is a background process a Session started (a
+// fire-and-forget Execute) that still runs on the computer hosting the
+// Session (droid 1.0). Pid and OutputFile are of that computer, which may not
+// be the Client's.
+type SessionBackgroundProcess struct {
+	// Stable identifier: the starting tool call's id when known.
+	ID          string  \`json:"id"\`
+	Pid         float64 \`json:"pid"\`
+	Command     string  \`json:"command"\`
+	StartedAtMs float64 \`json:"startedAtMs"\`
+	ToolUseID   string  \`json:"toolUseId,omitempty"\`
+	OutputFile  string  \`json:"outputFile,omitempty"\`
+}
+`,
+  SessionBackgroundProcessesSnapshot: `// SessionBackgroundProcessesSnapshot is every background process a Session
+// tracks, as of CapturedAtMs on the Session host's clock (droid 1.0).
+type SessionBackgroundProcessesSnapshot struct {
+	CapturedAtMs float64                    \`json:"capturedAtMs"\`
+	Processes    []SessionBackgroundProcess \`json:"processes"\`
+}
+`,
+  BackgroundProcessesChangedNotification: `// BackgroundProcessesChangedNotification (session notification
+// background_processes_changed, droid 1.0) is a Session's background
+// processes after one started or ended.
+type BackgroundProcessesChangedNotification struct {
+	Type         string                     \`json:"type"\`
+	CapturedAtMs float64                    \`json:"capturedAtMs"\`
+	Processes    []SessionBackgroundProcess \`json:"processes"\`
+}
+`,
+  KillBackgroundProcessParams: `type KillBackgroundProcessParams struct {
+	SessionID string \`json:"sessionId"\`
+	ProcessID string \`json:"processId"\`
+}
+`,
+  KillBackgroundProcessResult: `type KillBackgroundProcessResult struct {
+	// False when the Session tracks no running process with that id, or the
+	// process could not be signalled.
+	Killed bool \`json:"killed"\`
+}
+`,
+}
+const NEWER_METHODS = [
+  { rpc: 'daemon.kill_background_process', paramsType: 'KillBackgroundProcessParams', resultType: 'KillBackgroundProcessResult' },
+]
 
 function emitStruct(s, shape = shapeOf(s)) {
   const name = nameOf.get(s)
@@ -381,9 +438,11 @@ function emitUnion(s) {
     const goDisc = goField(disc)
     const cases = []
     for (const o of opts) {
-      const v = unwrap(shapeOf(o)[disc]).s._def.value
-      const member = typeRef(o, name + pascal(v))
-      cases.push({ v, member, c: constName(name + goDisc + pascal(v)) })
+      // A branch's discriminator may be a z.enum: one case per value, one shape.
+      const d = unwrap(shapeOf(o)[disc]).s
+      const vs = tn(d) === 'ZodLiteral' ? [d._def.value] : literalUnionValues(d)
+      const member = typeRef(o, name + pascal(vs[0]))
+      for (const v of vs) cases.push({ v, member, c: constName(name + goDisc + pascal(v)) })
     }
     const goKind =
       typeof cases[0].v === 'boolean'
@@ -392,9 +451,15 @@ function emitUnion(s) {
           ? 'float64'
           : 'string'
     const consts = cases.map(({ v, c }) => `\t${c} ${goKind} = ${JSON.stringify(v)}`)
-    const sw = cases.map(
-      ({ c, member }) =>
-        `\tcase ${c}:\n\t\tvar v ${member}\n\t\terr := json.Unmarshal(u.Raw, &v)\n\t\treturn &v, err`,
+    const groups = []
+    for (const { c, member } of cases) {
+      const g = groups.find((g) => g.member === member)
+      if (g) g.cs.push(c)
+      else groups.push({ member, cs: [c] })
+    }
+    const sw = groups.map(
+      ({ cs, member }) =>
+        `\tcase ${cs.join(', ')}:\n\t\tvar v ${member}\n\t\terr := json.Unmarshal(u.Raw, &v)\n\t\treturn &v, err`,
     )
     return `${comment(describe(s))}// ${name} is one of several shapes, told apart by its ${JSON.stringify(disc)} field.
 // Value decodes it into the shape that ${goDisc} names.
@@ -457,10 +522,62 @@ function drain() {
 
 // ---------- roots ----------
 
+for (const n of NEWER_METHODS) {
+  if (methods.some((m) => m.rpc === n.rpc)) throw new Error(`${n.rpc} is in the release now: drop it from NEWER_METHODS`)
+  const base = pascal(n.rpc.replace(/^daemon\./, ''))
+  methods.push({ name: n.rpc, rpc: n.rpc, ack: false, done: [], newer: { ...n, goName: base, base, paramsOptional: false } })
+}
+
+// Daemon-initiated requests and notifications, found by their envelopes. A
+// request envelope that is not in the DaemonClient table is the Daemon's own
+// request only when DaemonDroidEvent names it (ask_user, pick_options, ...);
+// the rest (get_git_branch_divergence, warmup_cache, desktop.status) are
+// methods the Daemon serves that the TS client does not call, added to the
+// table with the result their response envelope carries.
+function envelopeResult(requestVar) {
+  const env = all[requestVar.replace(/RequestSchema$/, 'ResponseSchema')]
+  if (!env) return null
+  for (const o of tn(env) === 'ZodUnion' ? env._def.options : [env]) {
+    const u = unwrap(o).s
+    if (tn(u) === 'ZodObject' && shapeOf(u).result) return shapeOf(u).result
+  }
+  return null
+}
+const serverRequests = [],
+  notifications = []
+const daemonEvents = new Set(Object.values(enums.DaemonDroidEvent ?? {}))
+for (const [k, v] of Object.entries(all)) {
+  if (!v?._def || tn(v) !== 'ZodObject') continue
+  const sh = shapeOf(v)
+  const type = sh.type && unwrap(sh.type).s,
+    method = sh.method && unwrap(sh.method).s
+  if (!type || !method || tn(type) !== 'ZodLiteral' || tn(method) !== 'ZodLiteral') continue
+  const m = method._def.value
+  if (typeof m !== 'string' || !m.startsWith('daemon.') || !sh.params) continue
+  const entry = { var: k, method: m, params: sh.params }
+  if (type._def.value === 'notification' && !notifications.some((n) => n.method === m))
+    notifications.push(entry)
+  if (
+    type._def.value !== 'request' ||
+    methods.some((x) => x.rpc === m) ||
+    serverRequests.some((n) => n.method === m)
+  )
+    continue
+  const res = 'Daemon' + pascal(m.replace(/^daemon\./, '')) + 'ResultSchema'
+  const resSchema = all[res] ?? envelopeResult(k)
+  if (daemonEvents.size && !daemonEvents.has(m) && resSchema)
+    methods.push({ name: m, rpc: m, req: k, res, resSchema, ack: false, done: [] })
+  else serverRequests.push(entry)
+}
+
 const methodEntries = []
 for (const m of methods) {
+  if (m.newer) {
+    methodEntries.push({ ...m, ...m.newer })
+    continue
+  }
   const reqSchema = all[m.req],
-    resSchema = all[m.res]
+    resSchema = m.resSchema ?? all[m.res]
   if (!reqSchema || !resSchema) throw new Error('missing schema for ' + m.name)
   const base = pascal(m.rpc.replace(/^daemon\./, ''))
   const paramsField = shapeOf(unwrap(reqSchema).s).params
@@ -487,27 +604,6 @@ for (const m of methods) {
   })
 }
 
-// Daemon-initiated requests and notifications, found by their envelopes.
-const serverRequests = [],
-  notifications = []
-for (const [k, v] of Object.entries(all)) {
-  if (!v?._def || tn(v) !== 'ZodObject') continue
-  const sh = shapeOf(v)
-  const type = sh.type && unwrap(sh.type).s,
-    method = sh.method && unwrap(sh.method).s
-  if (!type || !method || tn(type) !== 'ZodLiteral' || tn(method) !== 'ZodLiteral') continue
-  const m = method._def.value
-  if (typeof m !== 'string' || !m.startsWith('daemon.') || !sh.params) continue
-  const entry = { var: k, method: m, params: sh.params }
-  if (type._def.value === 'notification' && !notifications.some((n) => n.method === m))
-    notifications.push(entry)
-  if (
-    type._def.value === 'request' &&
-    !methods.some((x) => x.rpc === m) &&
-    !serverRequests.some((n) => n.method === m)
-  )
-    serverRequests.push(entry)
-}
 for (const n of [...notifications, ...serverRequests]) {
   const base = pascal(n.method.replace(/^daemon\./, ''))
   const p = unwrap(n.params).s
@@ -536,6 +632,11 @@ for (const k of [
   if (all[k]) typeRef(all[k], pascal(k.replace(/Schema$/, '')))
 }
 drain()
+for (const [name, decl] of Object.entries(NEWER_TYPES)) {
+  if (taken.has(name)) throw new Error(`${name} is in the schemas now: drop it from NEWER_TYPES`)
+  claim({}, name)
+  decls.push(decl)
+}
 
 // ---------- files ----------
 

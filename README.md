@@ -5,7 +5,8 @@ protocol that Factory's TypeScript SDK (`@factory/droid-sdk`) speaks. Pure Go,
 no Node at run time.
 
 Checked against `droid daemon` 0.233.0 (protocol 1.245.0); types generated from
-`@factory/droid-sdk` 0.9.1 (protocol 1.201.1).
+`@factory/droid-sdk` 0.10.0 (protocol 1.269.0), plus what droid 1.0 and 1.1
+add that it lacks (see "Upgrading" below).
 
 ```sh
 go get github.com/kkkk2323/droid-sdk-go@latest
@@ -18,8 +19,8 @@ the Fake Daemon below.
 
 | Package        | What it is                                                                                                                                                                                                                                                                           | Written by         |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
-| `protocol`     | Every type of the protocol (660), method and notification names, per-method ack/timeout table                                                                                                                                                                                        | generated (`gen/`) |
-| `droid` (root) | `Client`: one authenticated connection; a typed method for each of the 132 RPCs (`zz_client_methods.go`, generated), `Call`, `Subscribe`, `Handle`/`HandleLater`/`Respond` for the Daemon's own requests, frame recording                                                            | hand               |
+| `protocol`     | Every type of the protocol (831), method and notification names, per-method ack/timeout table                                                                                                                                                                                        | generated (`gen/`) |
+| `droid` (root) | `Client`: one authenticated connection; a typed method for each of the 148 RPCs (`zz_client_methods.go`, generated), `Call`, `Subscribe`, `Handle`/`HandleLater`/`Respond` for the Daemon's own requests, frame recording                                                            | hand               |
 | `controller`   | Connects and authenticates, reconnects and reloads Sessions, loads a Session before a call that needs its worker, tracks permission and AskUser prompts (keeping an answer given while a worker is gone until it is back), feeds the store. Port of the TS `DaemonSessionController` | hand               |
 | `session`      | The Sessions' state: transcript built from streamed deltas, working state, settings, token usage, todos, queued and optimistic messages, subagents, display filtering. Port of the TS `MultiSessionStateManager`/`SessionStateManager`/`SessionStore`. No I/O                        | hand               |
 | `fakedaemon`   | Runs the Fake Daemon (Node) for Go tests                                                                                                                                                                                                                                             | hand               |
@@ -91,13 +92,11 @@ store subscriber must not block.
   notifications; a store matches `get_session_messages` without them.
 - `get_session_messages` refuses `limit: 500` (100 works).
 - An unknown Session is -32004 (`controller.ErrSessionNotFound`).
-- Fields newer than the 0.9.1 schemas: `seq` on `create_message` and
-  messages, `migrationActive` on settings. Decoding ignores them.
 - Spec mode (droid 0.244): ExitSpecMode asks with `exit_spec_mode` details
   that say `supportsClientStartedHandoff`. Answered with a
   `proceed_new_session*` option and `clientStartsHandoffSession`, the
   Daemon creates the new Session without starting it
-  (`spec_handoff_session_created`, newer than the 0.9.1 schemas) and the
+  (`spec_handoff_session_created`) and the
   Client loads it and sends the plan: `PermissionAnswer.ClientStartsHandoffSession`,
   reported by `SpecHandoffStarted` or `SpecHandoffFailed`.
 - Queued AskUser (droid 1.1): `daemon.ask_user` with `blocking: false` and
@@ -174,10 +173,38 @@ gen/generate.sh 0.10.0 && go build ./... && go test -race ./...
 
 `generate.sh` installs that release from npm, pulls the zod schemas and the
 DaemonClient method table out of its bundle, and rewrites `protocol/` and
-`zz_client_methods.go` (same version in, same bytes out). Fields a newer
-`droid` sends that the release lacks are listed in `gen/gen.mjs`'s
-`NEWER_FIELDS`; generation fails once a release has one of them itself.
-The compiler then points at the hand-written code that uses what changed.
+`zz_client_methods.go` (same version in, same bytes out). What a newer
+`droid` has that the release lacks is listed in `gen/gen.mjs`: fields on
+generated structs in `NEWER_FIELDS`, whole types in `NEWER_TYPES` and
+methods in `NEWER_METHODS`; generation fails once a release has one of
+them itself. Against 0.10.0 they are:
+
+- `NEWER_FIELDS`: `blocking` and `context` on AskUser and on load's
+  pending AskUser requests (droid 1.1); `behavesLikeModelId` on
+  `ModelMetadata` (droid 1.1); `backgroundWork` on
+  `droid_working_state_changed` and on the load result, and the load
+  result's `backgroundProcesses` (droid 1.0).
+- `NEWER_TYPES`: `SessionBackgroundProcess`,
+  `SessionBackgroundProcessesSnapshot`,
+  `BackgroundProcessesChangedNotification`, and the params and result of
+  `daemon.kill_background_process` (droid 1.0).
+- `NEWER_METHODS`: `daemon.kill_background_process` (droid 1.0).
+
+Session notifications newer than the release are not in the generated
+union (`Value()` is nil); the code that handles them reads their raw JSON:
+`ask_user_resolved` (`controller/queued.go`), `child_session_settled`
+(`session/settled.go`) and `background_processes_changed`. The compiler
+points at the hand-written code that uses what changed.
+
+Measured on 0.9.1 → 0.10.0: 171 types added (and droid 1.0's 5 in
+`NEWER_TYPES`), 5 renamed or dropped (`EditableSkillSettingsLevel` is
+`ConfigItemsParamsLevel` now), 132 → 148 methods (one of them droid 1.0's), 2 signatures changed (`GetDefaultSettings` and `RelayStart` take
+params), and the spec handoff's hand-written decoding replaced by the
+generated `SpecHandoffSessionCreatedNotification`. `gen/` needed three
+fixes: 0.10's `engine.request(...)` calls, unions whose branch
+discriminator is a `z.enum`, and requests the TS client does not call
+(`get_git_branch_divergence`, `warmup_cache`, `desktop.status`), which
+are methods now rather than requests of the Daemon.
 
 Measured on 0.8.0 → 0.9.1: 11 types added or renamed, ~500 changed lines of
 generated code, the same 132 methods, and 6 compile errors, all in `session`

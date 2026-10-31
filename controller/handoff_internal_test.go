@@ -13,7 +13,7 @@ func TestPermissionResponseCarriesTheSpecHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(b); got != `{"selectedOption":"proceed_new_session_low","sessionId":"s1","clientStartsHandoffSession":true,"specHandoffId":"h1"}` {
+	if got := string(b); got != `{"selectedOption":"proceed_new_session_low","clientStartsHandoffSession":true,"specHandoffId":"h1","sessionId":"s1"}` {
 		t.Fatalf("wire %s", got)
 	}
 	b, _ = json.Marshal(permissionResponse("s1", PermissionAnswer{SelectedOption: protocol.ToolConfirmationOutcomeProceedOnce}, ""))

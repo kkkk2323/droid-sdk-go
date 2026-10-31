@@ -53,7 +53,7 @@ func TestDaemonMethods(t *testing.T) {
 
 	t.Run("settings", func(t *testing.T) {
 		must(c.UpdateSessionSettings(ctx, protocol.UpdateSessionSettingsParams{SessionID: id, ReasoningEffort: "high"}))(t)
-		defaults := must(c.GetDefaultSettings(ctx))(t)
+		defaults := must(c.GetDefaultSettings(ctx, protocol.GetDefaultSettingsParams{}))(t)
 		if len(defaults.AvailableModels) == 0 {
 			t.Fatal("no models")
 		}

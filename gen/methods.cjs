@@ -7,9 +7,10 @@ const lines = src.split('\n')
 const methods = []
 let cur = null
 for (const l of lines) {
-  const m = /^  (?:async )?(\w+)\(([^)]*)\) \{$/.exec(l)
+  // A signature may run over several lines (`dispatchAutomationRun(params, {`).
+  const m = /^  (?:async |static )?(\w+)\((.*)$/.exec(l)
   if (m && !['constructor', 'if', 'for', 'switch'].includes(m[1])) {
-    cur = { name: m[1], args: m[2], body: [] }
+    cur = { name: m[1], args: m[2].replace(/\)\s*\{$/, ''), body: [] }
     methods.push(cur)
     continue
   }
@@ -19,11 +20,15 @@ const out = []
 const odd = []
 for (const m of methods) {
   const b = m.body.join('\n')
-  const rpc = [...b.matchAll(/method: "([a-z_.]+)"/g)].map((x) => x[1])
+  const rpc = [...new Set([...b.matchAll(/method: "([a-z_.]+)"/g)].map((x) => x[1]))]
   if (rpc.length === 0) continue
   const req = /(\w+RequestSchema\w*)\.parse/.exec(b)?.[1]
+  // 0.10 sends some requests with this.engine.request(validated, X, {...}) and
+  // passes the parse inline (sendRequest(XRequestSchema.parse(request), X)).
   const res =
-    /sendRequest\(\s*validated,\s*(\w+)/.exec(b)?.[1] ?? /responseSchema: (\w+)/.exec(b)?.[1]
+    /(?:sendRequest|engine\.request)\(\s*(?:validated|\w+RequestSchema\w*\.parse\(request\)),\s*(\w+)/.exec(b)?.[1] ??
+    /responseSchema: (\w+)/.exec(b)?.[1] ??
+    (req && /^Daemon\w+RequestSchema$/.test(req) ? req.replace(/RequestSchema$/, 'ResultSchema') : undefined)
   const ack = /sendAckCompatibleRequest/.test(b)
   const done = [...b.matchAll(/notification\.type === "(\w+)"/g)].map((x) => x[1])
   const timeout =

@@ -1,25 +1,12 @@
 package controller
 
 import (
-	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
 
 	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
-
-// notificationSpecHandoffSessionCreated is newer than the generated
-// notification union, which decodes it to nil.
-const notificationSpecHandoffSessionCreated = "spec_handoff_session_created"
-
-// specHandoffSessionCreated: the Daemon created the Session a spec handoff
-// answer asked for, without starting it.
-type specHandoffSessionCreated struct {
-	NewSessionID  string `json:"newSessionId"`
-	InitialPrompt string `json:"initialPrompt"`
-	SpecHandoffID string `json:"specHandoffId"`
-}
 
 var errNoHandoffSession = errors.New("droid: agent turn ended without creating the spec handoff session")
 
@@ -64,13 +51,9 @@ func (c *Controller) failHandoff(sessionID string, err error) {
 }
 
 // onSpecHandoffCreated takes the Session's pending spec handoff at once,
-// as the turn's end follows right after; c.mu is held.
-func (c *Controller) onSpecHandoffCreated(sessionID string, raw json.RawMessage) {
-	var n specHandoffSessionCreated
-	if err := json.Unmarshal(raw, &n); err != nil {
-		c.log.Warn("droid: undecodable spec handoff notification", "err", err)
-		return
-	}
+// as the turn's end follows right after: the Daemon created the Session the
+// answer asked for, without starting it. c.mu is held.
+func (c *Controller) onSpecHandoffCreated(sessionID string, n protocol.SpecHandoffSessionCreatedNotification) {
 	h, ok := c.prompts.handoffs[sessionID]
 	if !ok {
 		return
@@ -81,7 +64,7 @@ func (c *Controller) onSpecHandoffCreated(sessionID string, raw json.RawMessage)
 
 // startHandoffSession loads the new Session of a spec handoff and sends it
 // the plan as its first message.
-func (c *Controller) startHandoffSession(sessionID string, h specHandoff, n specHandoffSessionCreated) {
+func (c *Controller) startHandoffSession(sessionID string, h specHandoff, n protocol.SpecHandoffSessionCreatedNotification) {
 	started := SpecHandoffStarted{SessionID: sessionID, NewSessionID: n.NewSessionID, RequestID: h.requestID}
 	// Another answer's handoff: the Client that gave it starts the Session.
 	if n.SpecHandoffID != h.id {

@@ -1,6 +1,6 @@
-@factory/droid-sdk 0.9.1
+@factory/droid-sdk 0.10.0
 
-methods (132):
+methods (148):
   daemon.authenticate
   daemon.logout
   daemon.initialize_session
@@ -14,6 +14,7 @@ methods (132):
   daemon.list_available_sessions
   daemon.list_models
   daemon.get_session_messages
+  daemon.get_session_turn_outcome
   daemon.update_session_settings (ack, completed by settings_updated)
   daemon.change_working_directory
   daemon.validate_working_directory
@@ -21,11 +22,17 @@ methods (132):
   daemon.trust_folder
   daemon.get_default_settings
   daemon.update_session_defaults
+  daemon.config_items
+  daemon.apply_user_preferences
+  daemon.get_user_preferences_state
+  daemon.resolve_user_preferences
   daemon.list_custom_models
   daemon.upsert_custom_model
   daemon.delete_custom_model
   daemon.trigger_update
   daemon.install_ssh_key
+  daemon.desktop.ensure
+  daemon.desktop.input
   daemon.relay.start
   daemon.relay.stop
   daemon.relay.get_status
@@ -37,9 +44,11 @@ methods (132):
   daemon.list_files
   daemon.search_files
   daemon.search_sessions
+  daemon.cancel_search_sessions
   daemon.get_mcp_config
   daemon.update_mcp_config
   daemon.toggle_mcp_server
+  daemon.refresh_connector_tool_catalog
   daemon.authenticate_mcp_server
   daemon.clear_mcp_auth
   daemon.cancel_mcp_auth
@@ -81,6 +90,7 @@ methods (132):
   daemon.inspect_worktree_deletion
   daemon.list_automations
   daemon.run_automation
+  daemon.dispatch_automation_run
   daemon.pause_automation
   daemon.resume_automation
   daemon.get_automation_history
@@ -116,10 +126,10 @@ methods (132):
   daemon.hold_session_crons
   daemon.resume_session_crons
   daemon.get_git_diff
+  daemon.get_checkout_metadata
   daemon.list_git_branches
   daemon.checkout_git_branch
   daemon.resolve_pull_request_statuses
-  daemon.get_git_branch_divergence
   daemon.inspect_mission_readiness
   daemon.acknowledge_mission_readiness_warning
   daemon.git_push
@@ -128,11 +138,17 @@ methods (132):
   daemon.get_semantic_diff_cache
   daemon.save_semantic_diff_cache
   daemon.generate_semantic_diff
+  daemon.start_pull_request_layer_manifest_generation
   daemon.get_proxy_token
   daemon.get_workspace_file_content
   daemon.write_workspace_file_content
+  daemon.get_git_diff_file_contents
   daemon.push_cwd_file_to_url
   daemon.pull_url_to_cwd_file
+  daemon.kill_background_process
+  daemon.get_git_branch_divergence
+  daemon.warmup_cache
+  daemon.desktop.status
 
 notifications (9):
   daemon.connection_status
@@ -146,6 +162,6 @@ notifications (9):
   daemon.relay.status_changed
 
 daemon requests (3):
-  daemon.warmup_cache
   daemon.request_permission
   daemon.ask_user
+  daemon.pick_options
