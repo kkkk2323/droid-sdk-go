@@ -387,6 +387,84 @@ func TestAMessageTheDaemonTookDuringADropIsNotSentAgain(t *testing.T) {
 	}
 }
 
+func backgroundChangedEvent(e controller.Event) bool {
+	n, ok := e.(controller.SessionNotification)
+	return ok && n.Raw.Type == "background_processes_changed"
+}
+
+// A background process a turn leaves running shows on its Session, from the
+// live notification and from a load, until daemon.kill_background_process
+// stops it.
+func TestBackgroundProcessesFollowTheDaemon(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+		Turn:     &fakedaemon.Turn{Kind: "backgroundProcess", Command: "npm run dev", Reply: "The dev server runs.", Pid: 4242},
+	})
+	c, r := start(t, d, controller.Config{})
+	ctx := context.Background()
+	id := d.Sessions[0].SessionID
+	if _, err := c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddUserMessage(ctx, protocol.AddUserMessageParams{SessionID: id, Text: "Start the dev server"}); err != nil {
+		t.Fatal(err)
+	}
+	_, next := r.wait(t, 0, "the process started", backgroundChangedEvent)
+	_, next = r.wait(t, next, "turn ended", turnEnded)
+	s := c.Store().Session(id)
+	procs := s.BackgroundProcesses()
+	if len(procs) != 1 || procs[0].Pid != 4242 || procs[0].Command != "npm run dev" || procs[0].ToolUseID != procs[0].ID || procs[0].OutputFile == "" {
+		t.Fatalf("processes %+v", procs)
+	}
+	// The call's answer is droid's launch text, which Clients also read.
+	launch := false
+	for _, m := range s.Messages() {
+		for _, b := range m.Content {
+			if b.Type == protocol.ContentBlockTypeToolResult && strings.Contains(string(b.Raw), "Background process started (PID: 4242)\\nCommand: npm run dev\\nOutput: "+procs[0].OutputFile) {
+				launch = true
+			}
+		}
+	}
+	if !launch {
+		t.Fatalf("no launch text in %+v", s.Messages())
+	}
+
+	// A load brings them as well.
+	c.Forget(id)
+	res, err := c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.BackgroundProcesses == nil || len(c.Store().Session(id).BackgroundProcesses()) != 1 {
+		t.Fatalf("after a load %+v", res.BackgroundProcesses)
+	}
+
+	cl, err := c.Client()
+	if err != nil {
+		t.Fatal(err)
+	}
+	killed, err := cl.KillBackgroundProcess(ctx, protocol.KillBackgroundProcessParams{SessionID: id, ProcessID: procs[0].ID})
+	if err != nil || !killed.Killed {
+		t.Fatalf("kill: %+v, %v", killed, err)
+	}
+	r.wait(t, next, "the process gone", backgroundChangedEvent)
+	if got := c.Store().Session(id).BackgroundProcesses(); got != nil {
+		t.Fatalf("after the kill %+v", got)
+	}
+	again, err := cl.KillBackgroundProcess(ctx, protocol.KillBackgroundProcessParams{SessionID: id, ProcessID: procs[0].ID})
+	if err != nil || again.Killed {
+		t.Fatalf("killed twice: %+v, %v", again, err)
+	}
+	r.wait(t, next, "the turn on the command's end", func(e controller.Event) bool {
+		n, ok := e.(controller.SessionNotification)
+		if !ok {
+			return false
+		}
+		cm, ok := n.Value.(*protocol.AgentTurnCompletedNotification)
+		return ok && cm.TurnID == "execute-completion:"+procs[0].ToolUseID
+	})
+}
+
 func TestReconnectLoadsSessionsAgain(t *testing.T) {
 	d := fakedaemon.Start(t, fakedaemon.Scenario{
 		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},

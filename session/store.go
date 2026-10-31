@@ -425,8 +425,11 @@ func (s *Store) HandleNotification(p protocol.SessionNotificationParams, opts Ha
 	if !valid(p.SessionID) {
 		return errors.New("session: notification without a session id")
 	}
-	if p.Notification.Type == notificationChildSessionSettled {
+	switch p.Notification.Type {
+	case notificationChildSessionSettled:
 		return s.handleChildSessionSettled(p.Notification.Raw)
+	case notificationBackgroundProcessesChanged:
+		return s.handleBackgroundProcessesChanged(p.SessionID, p.Notification.Raw)
 	}
 	v, err := p.Notification.Value()
 	if err != nil {
@@ -576,7 +579,8 @@ type LoadToken struct {
 	summaryRev           int
 	// interrupted pins, when the result arrived, the queued messages a
 	// dropped connection interrupted (see AtLoadResult); nil until then.
-	interrupted map[string]bool
+	interrupted        map[string]bool
+	backgroundRevision int
 }
 
 // BeginLoad marks a Session Loading (see MarkLoading) and returns the token
@@ -602,6 +606,7 @@ func (s *Store) BeginLoad(id string) LoadToken {
 			st.setLoadState(Loading, false)
 		}
 		tok.WorkingStateRevision = st.workingRevision
+		tok.backgroundRevision = st.backgroundRevision
 		tok.summaryEpoch, tok.summaryRev = s.summaryEpoch, s.summaryRev
 	})
 	return tok
@@ -655,7 +660,8 @@ type LoadOutcome struct {
 // ApplyLoadResult takes a daemon.load_session result: it merges the
 // transcript, hydrates the working state unless a live notification
 // overtook the call, and applies settings, token usage, model list, title,
-// calling Session, subagent summaries and the Daemon's queue.
+// calling Session, subagent summaries, the Daemon's queue and its
+// background processes.
 // messageLimit is the messageLimit the call asked for.
 func (s *Store) ApplyLoadResult(tok LoadToken, res *protocol.LoadSessionResult, messageLimit int) LoadOutcome {
 	out := LoadOutcome{ReportedWorkingState: reportedWorkingState(res)}
@@ -686,6 +692,11 @@ func (s *Store) ApplyLoadResult(tok LoadToken, res *protocol.LoadSessionResult, 
 			interrupted = maps.Clone(st.interrupted)
 		}
 		out.Resubmit = st.reconcileQueue(res, interrupted)
+		// A background_processes_changed (or a clear) since BeginLoad is
+		// newer than the result's snapshot.
+		if res.BackgroundProcesses != nil && st.backgroundRevision == tok.backgroundRevision {
+			st.setBackground(res.BackgroundProcesses)
+		}
 		if len(res.AvailableModels) > 0 {
 			st.setModels(res.AvailableModels)
 		}

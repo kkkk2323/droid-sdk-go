@@ -13,6 +13,8 @@ import {
   todoTurn,
   structuredTurn,
   specTurn,
+  backgroundProcessTurn,
+  killBackgroundProcessHandler,
   interruptHandler,
   resolveQueuedHandler,
   withQueue,
@@ -42,6 +44,7 @@ type TurnSpec =
     }
   | { kind: 'structured'; structured: Record<string, unknown> }
   | { kind: 'spec'; plan: string; title?: string; reply: string }
+  | { kind: 'backgroundProcess'; command: string; reply: string; pid?: number; outputFile?: string }
 type Spec = {
   sessions?: SessionSpec[]
   turn?: TurnSpec
@@ -71,6 +74,8 @@ function turnHandler(turn: TurnSpec | undefined) {
       return structuredTurn(() => turn.structured)
     case 'spec':
       return specTurn(turn)
+    case 'backgroundProcess':
+      return backgroundProcessTurn(turn)
   }
 }
 
@@ -92,6 +97,7 @@ const daemon = await FakeDaemon.start({
     ...(handler ? { 'daemon.add_user_message': withQueue(handler) } : {}),
     'daemon.interrupt_session': interruptHandler,
     'daemon.resolve_queued_user_message': resolveQueuedHandler,
+    'daemon.kill_background_process': killBackgroundProcessHandler,
   },
   validDirectories: spec.validDirectories,
 })

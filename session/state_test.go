@@ -314,6 +314,68 @@ func TestSeqLessRowsAreFloors(t *testing.T) {
 	}
 }
 
+func backgroundProcess(id string, pid float64) protocol.SessionBackgroundProcess {
+	return protocol.SessionBackgroundProcess{ID: id, Pid: pid, Command: "npm run dev", StartedAtMs: 1, ToolUseID: id, OutputFile: "/tmp/" + id + ".log"}
+}
+
+func backgroundChanged(capturedAtMs float64, procs ...protocol.SessionBackgroundProcess) map[string]any {
+	if procs == nil {
+		procs = []protocol.SessionBackgroundProcess{}
+	}
+	return map[string]any{"type": "background_processes_changed", "capturedAtMs": capturedAtMs, "processes": procs}
+}
+
+func TestBackgroundProcesses(t *testing.T) {
+	s, _ := newTestStore()
+	const id = "s1"
+	// One for a Session not registered yet waits for it.
+	send(t, s, id, backgroundChanged(5, backgroundProcess("tu0", 40)))
+	loadWith(t, s, id, protocol.LoadSessionResult{})
+	sess := s.Session(id)
+	if got := sess.BackgroundProcesses(); len(got) != 1 || got[0].ID != "tu0" {
+		t.Fatalf("replayed %+v", got)
+	}
+	rec := record(s)
+	send(t, s, id, backgroundChanged(10, backgroundProcess("tu1", 41), backgroundProcess("tu2", 42)))
+	got := sess.BackgroundProcesses()
+	if len(got) != 2 || got[1].Pid != 42 || got[1].OutputFile != "/tmp/tu2.log" || !rec.has(Event{Kind: EventMetadataUpdated, SessionID: id}) {
+		t.Fatalf("processes %+v", got)
+	}
+	got[0].ID = "changed"
+	if sess.BackgroundProcesses()[0].ID != "tu1" {
+		t.Fatal("BackgroundProcesses must return a copy")
+	}
+	// An older snapshot, delivered late, does not undo a newer one.
+	send(t, s, id, backgroundChanged(8, backgroundProcess("tu1", 41)))
+	if len(sess.BackgroundProcesses()) != 2 {
+		t.Fatal("an older snapshot replaced a newer one")
+	}
+	send(t, s, id, backgroundChanged(12, backgroundProcess("tu2", 42)))
+	if got := sess.BackgroundProcesses(); len(got) != 1 || got[0].ID != "tu2" {
+		t.Fatalf("after one ended %+v", got)
+	}
+
+	// A load brings the Daemon's list, unless one came while it was out.
+	tok := s.BeginLoad(id)
+	s.ApplyLoadResult(tok, &protocol.LoadSessionResult{BackgroundProcesses: &protocol.SessionBackgroundProcessesSnapshot{CapturedAtMs: 20, Processes: []protocol.SessionBackgroundProcess{backgroundProcess("tu3", 43)}}}, 0)
+	if got := sess.BackgroundProcesses(); len(got) != 1 || got[0].ID != "tu3" {
+		t.Fatalf("after a load %+v", got)
+	}
+	tok = s.BeginLoad(id)
+	send(t, s, id, backgroundChanged(30))
+	s.ApplyLoadResult(tok, &protocol.LoadSessionResult{BackgroundProcesses: &protocol.SessionBackgroundProcessesSnapshot{CapturedAtMs: 25, Processes: []protocol.SessionBackgroundProcess{backgroundProcess("tu3", 43)}}}, 0)
+	if got := sess.BackgroundProcesses(); got != nil {
+		t.Fatalf("a load's older list replaced a live one: %+v", got)
+	}
+
+	// The worker kills them as it exits.
+	send(t, s, id, backgroundChanged(40, backgroundProcess("tu4", 44)))
+	send(t, s, id, map[string]any{"type": "session_process_exited", "message": "exited", "timestamp": 1})
+	if got := sess.BackgroundProcesses(); got != nil {
+		t.Fatalf("after the worker exited %+v", got)
+	}
+}
+
 func TestLoadThenPrependOlderPage(t *testing.T) {
 	s, _ := newTestStore()
 	const id = "s1"

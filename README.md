@@ -113,6 +113,18 @@ store subscriber must not block.
   child's summary status and its working state to idle.
 - `behavesLikeModelId` on a custom model (droid 1.1) names the built-in
   model it behaves like.
+- Background processes (droid 1.0): an Execute with `fireAndForget`
+  answers `Background process started (PID: …)` and the Daemon reports the
+  Session's processes with `background_processes_changed` (the whole list,
+  `capturedAtMs` on the host's clock) and in load's `backgroundProcesses`.
+  `Session.BackgroundProcesses` keeps them (cleared when the worker exits);
+  `daemon.kill_background_process` (`Client.KillBackgroundProcess`) stops
+  one, after which droid gives the agent the end as a model-only user
+  message `execute-completion:<toolUseId>` that starts a turn.
+- Queued messages across a dropped connection (droid 1.1's reconciliation):
+  they stay shown; the reload's `pendingMessageRequestIds` keeps the ones
+  the Daemon admitted and drops the rest, and none of them is sent again.
+  Messages carry `seq`, the order the store keeps them in.
 
 ## Fake Daemon
 
@@ -127,8 +139,12 @@ instead of running an agent, and checks every message it sends with
   The package embeds the Fake Daemon bundled into one script
   (`fakedaemon/fake-daemon.mjs`), so a test needs only `node` on PATH.
   `fakedaemon.Turn` scripts the agent: a reply, a permission, AskUser (blocking or queued), a
-  todo list, structured output, or `spec` (ExitSpecMode and its handoff, as
-  droid 0.244 does them).
+  todo list, structured output, `spec` (ExitSpecMode and its handoff, as
+  droid 0.244 does them), or `backgroundProcess` (an Execute left running in
+  the background, with droid 1.0's launch text, `background_processes_changed`
+  and `daemon.kill_background_process`). Its `load_session` reports the
+  scripted turn's state: the agent loop running, held messages
+  (`queuedMessages`), `pendingMessageRequestIds` and background processes.
 - **TypeScript:** the npm package `@droi/fake-daemon` (`fake-daemon/`, with its
   built `dist/`), installed from this repository's tag:
 

@@ -116,6 +116,8 @@ const RESULT_SCHEMAS: Record<string, ZodLike> = {
   'daemon.delete_cron': z.object({ deleted: z.boolean() }),
   'daemon.hold_session_crons': z.object({ heldCount: z.number().int().nonnegative() }),
   'daemon.resume_session_crons': z.object({ resumedCount: z.number().int().nonnegative() }),
+  // Newer than the SDK's schemas (droid 1.0).
+  'daemon.kill_background_process': z.object({ killed: z.boolean() }),
 }
 
 // The Daemon sends a Session's lifecycle on the same method; the SDK does not
@@ -164,6 +166,25 @@ const ChildSessionSettledParams = z.object({
   }),
 })
 
+// Newer than the SDK's schemas (droid 1.0): a Session's background processes.
+const BackgroundProcessesChangedParams = z.object({
+  sessionId: z.string(),
+  notification: z.object({
+    type: z.literal('background_processes_changed'),
+    capturedAtMs: z.number(),
+    processes: z.array(
+      z.object({
+        id: z.string(),
+        pid: z.number(),
+        command: z.string(),
+        startedAtMs: z.number(),
+        toolUseId: z.string().optional(),
+        outputFile: z.string().optional(),
+      }),
+    ),
+  }),
+})
+
 function either(first: ZodLike, ...rest: ZodLike[]): ZodLike {
   return {
     safeParse(value) {
@@ -181,6 +202,7 @@ const NOTIFICATION_SCHEMAS: Record<string, ZodLike> = {
     SpecHandoffSessionCreatedParams,
     AskUserResolvedParams,
     ChildSessionSettledParams,
+    BackgroundProcessesChangedParams,
   ),
   'daemon.connection_status': ConnectionStatusParams,
   'daemon.session.archive_state_changed': z.object({

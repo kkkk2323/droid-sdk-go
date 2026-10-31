@@ -108,6 +108,10 @@ type state struct {
 	decomp           protocol.DecompSessionType
 	completion       protocol.AgentTurnCompletionReason
 	retry            *LLMRetry
+	// background is the Daemon's last snapshot of the Session's background
+	// processes; backgroundRevision counts updates, for a load in flight.
+	background         *protocol.SessionBackgroundProcessesSnapshot
+	backgroundRevision int
 
 	stats statsFold
 
@@ -551,7 +555,11 @@ func (st *state) handle(typ string, v any, opts HandleOptions) {
 			st.removeOptimistic(n.RequestID)
 		}
 		st.pauseDaemonQueued(n.RequestID)
+	case *protocol.BackgroundProcessesChangedNotification:
+		st.setBackground(&protocol.SessionBackgroundProcessesSnapshot{CapturedAtMs: n.CapturedAtMs, Processes: n.Processes})
 	case *protocol.SessionInactivityNotification, *protocol.SessionProcessExitedNotification:
+		// The worker kills its background processes as it exits.
+		st.setBackground(nil)
 		st.s.inactive[st.id] = true
 		st.setLoadState(NotLoaded, opts.PreserveWorkingStateOnInactive)
 	case *protocol.SessionUnsubscribedNotification:

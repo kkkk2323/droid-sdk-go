@@ -36,7 +36,8 @@ export declare function withQueue(handler: MethodHandler): MethodHandler;
  * What daemon.load_session reports of a Session's scripted turn, as the real
  * Daemon does: whether the agent loop runs, the messages it holds for after
  * the turn (queuedMessages), and the requests it admitted
- * (pendingMessageRequestIds: the running turn's and the held ones).
+ * (pendingMessageRequestIds: the running turn's and the held ones), and the
+ * background processes its turns left running (droid 1.0).
  */
 export declare function turnLoadState(sessionId: string): Record<string, unknown>;
 /** Wraps a `daemon.load_session` handler so that its result reports {@link turnLoadState}. */
@@ -85,6 +86,29 @@ export interface QueuedAskUserTurnOptions {
  * that starts a turn, as droid 1.1 does.
  */
 export declare function queuedAskUserTurn(options: QueuedAskUserTurnOptions): MethodHandler;
+export interface BackgroundProcessTurnOptions {
+    /** What the Execute call runs in the background. */
+    command: string;
+    /** Reply streamed once the command started. */
+    reply: string;
+    pid?: number;
+    outputFile?: string;
+}
+/**
+ * Handler for `daemon.add_user_message` where the agent starts a command in
+ * the background (Execute with fireAndForget, as droid 1.0 does): the call
+ * answers with droid's launch text, the Daemon reports the process with
+ * background_processes_changed, and the turn ends with `reply` while the
+ * process runs on. {@link killBackgroundProcessHandler} stops it.
+ */
+export declare function backgroundProcessTurn(options: BackgroundProcessTurnOptions): MethodHandler;
+/**
+ * Handler for `daemon.kill_background_process` (droid 1.0): stops a process a
+ * background turn started, reports the list without it, and, as droid does,
+ * gives the agent the command's end as a model-only user message
+ * (`execute-completion:<tool use>`) that starts a turn.
+ */
+export declare const killBackgroundProcessHandler: MethodHandler;
 export interface TodoTurnOptions {
     todos: Array<{
         id: string;

@@ -61,7 +61,14 @@ type Message struct {
 // once approved; elsewhere, such as in the Session a spec handoff creates,
 // only streams Reply). A Session starts in Spec mode with Extra
 // {"settings": {"interactionMode": "spec"}}, or initialize_session's
-// interactionMode.
+// interactionMode. "backgroundProcess" runs Command in the background (an
+// Execute with fireAndForget, answered with droid 1.0's launch text "Background
+// process started (PID: Pid)\nCommand: ...\nOutput: OutputFile..."), reports it
+// with background_processes_changed and in load_session's
+// backgroundProcesses, and ends the turn with Reply while it runs;
+// daemon.kill_background_process stops it, reports the list without it and
+// starts the turn droid starts on the command's end. Pid defaults to 48213,
+// OutputFile to a file under /tmp named after the tool use.
 type Turn struct {
 	Kind        string         `json:"kind"`
 	Deltas      []string       `json:"deltas,omitempty"`
@@ -77,6 +84,8 @@ type Turn struct {
 	Structured  map[string]any `json:"structured,omitempty"`
 	Plan        string         `json:"plan,omitempty"`
 	Title       string         `json:"title,omitempty"`
+	Pid         int            `json:"pid,omitempty"`
+	OutputFile  string         `json:"outputFile,omitempty"`
 }
 
 // Todo is an item of a todo turn's list.
