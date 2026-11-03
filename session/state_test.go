@@ -409,6 +409,29 @@ func TestLoadThenPrependOlderPage(t *testing.T) {
 	}
 }
 
+// A Session seeded from another one (droid 1.2) starts with a trailing
+// window of the history it copied.
+func TestInitializeResultWithOlderMessages(t *testing.T) {
+	s, _ := newTestStore()
+	older := true
+	s.ApplyInitializeResult(&protocol.InitializeSessionResult{
+		SessionID: "s1",
+		Session: protocol.Session{Messages: []protocol.FactoryDroidMessage{
+			msg("u2", roleUser, "second", 30, "a1"),
+			msg("a2", roleAssistant, "answer 2", 40, "u2"),
+		}},
+		HasOlderMessages: &older,
+	}, "/repo", nil)
+	sess := s.Session("s1")
+	if cursor, ok := sess.OlderMessagesCursor(); !sess.HasOlderMessages() || !ok || cursor != "u2" {
+		t.Fatalf("older=%v cursor %q %v", sess.HasOlderMessages(), cursor, ok)
+	}
+	s.ApplyInitializeResult(&protocol.InitializeSessionResult{SessionID: "s2"}, "/repo", nil)
+	if s.Session("s2").HasOlderMessages() {
+		t.Fatal("a new Session has no older messages")
+	}
+}
+
 // A Session the Store forgot still gets the Daemon's notices; one saying
 // its worker stopped is older than a later load, which must not end
 // NotLoaded because of it.

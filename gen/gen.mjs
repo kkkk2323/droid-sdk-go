@@ -338,6 +338,16 @@ const NEWER_FIELDS = {
     ['backgroundWork', '*int64', 'The background work the Session waits on at load time, as droid_working_state_changed reports it (droid 1.0).'],
     ['backgroundProcesses', '*SessionBackgroundProcessesSnapshot', 'The background processes the Session tracks at load time (droid 1.0). Absent from older Daemons, which also do not handle daemon.kill_background_process.'],
   ],
+  AskUserQuestion: [
+    ['optionDescriptions', '[]string', "What choosing each option means, index-aligned with Options (droid 1.2: an Anthropic model asking in Claude Code's AskUserQuestion shape writes one per option). Absent when the agent gave none."],
+  ],
+  InitializeSessionResult: [
+    ['hasOlderMessages', '*bool', 'Whether session.messages is a trailing window of a longer history (droid 1.2, a Session seeded from another one); the rest comes from daemon.get_session_messages.'],
+  ],
+  AutomationRunRecord: [
+    ['failureReason', 'string', 'Machine-readable classification of a recorded failure (droid 1.2). A plain string: a reason newer than the Client is kept as reported.'],
+    ['outcomeOverride', '*AutomationRunOutcomeOverride', "Present when a user changed the run's outcome (droid 1.2): Status already shows the changed outcome, this names the recorded one and who changed it."],
+  ],
 }
 
 // Types and methods of droid's Daemon that the release lacks, named as the
@@ -372,6 +382,18 @@ type BackgroundProcessesChangedNotification struct {
 	Type         string                     \`json:"type"\`
 	CapturedAtMs float64                    \`json:"capturedAtMs"\`
 	Processes    []SessionBackgroundProcess \`json:"processes"\`
+}
+`,
+  AutomationRunOutcomeOverride: `// AutomationRunOutcomeOverride is a user's change of an automation run's
+// outcome (droid 1.2).
+type AutomationRunOutcomeOverride struct {
+	// The outcome the run was recorded with before the change: success or
+	// failure, or another a newer writer records.
+	OriginalStatus string \`json:"originalStatus"\`
+	// Opaque label of who changed it: a user id, email, or display name.
+	ChangedBy string \`json:"changedBy"\`
+	// The user's reason for the change.
+	Note string \`json:"note,omitempty"\`
 }
 `,
   KillBackgroundProcessParams: `type KillBackgroundProcessParams struct {

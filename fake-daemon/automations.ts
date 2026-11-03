@@ -10,6 +10,11 @@ export interface AutomationRunFixture {
   startedAt: string
   completedAt?: string
   type?: 'run' | 'create'
+  errorMessage?: string
+  /** droid 1.2's classification of a failure. */
+  failureReason?: string
+  /** A user's change of the outcome (droid 1.2); status is the changed one. */
+  outcomeOverride?: { originalStatus: string; changedBy: string; note?: string }
 }
 
 export interface AutomationFixture {
@@ -113,6 +118,9 @@ export function automationHandlers(
           status: r.status,
           startedAt: r.startedAt,
           ...(r.completedAt ? { completedAt: r.completedAt } : {}),
+          ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
+          ...(r.failureReason ? { failureReason: r.failureReason } : {}),
+          ...(r.outcomeOverride ? { outcomeOverride: r.outcomeOverride } : {}),
         })),
         totalCount: runs.length,
       }

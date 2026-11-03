@@ -487,6 +487,7 @@ func (s *Store) ApplyInitializeResult(res *protocol.InitializeSessionResult, cwd
 	}
 	s.update(func() {
 		st := s.initialize(res.SessionID, res.Session.Messages)
+		st.hasOlder = res.HasOlderMessages != nil && *res.HasOlderMessages
 		st.setCwd(cwd)
 		if res.Session.Title != "" {
 			st.setTitle(res.Session.Title)

@@ -415,6 +415,30 @@ export interface AskUserTurnOptions {
   question: string
   options: string[]
   multiSelect?: boolean
+  /**
+   * What each option means, index-aligned. With them the agent asks in Claude
+   * Code's AskUserQuestion shape, as droid 1.2 does for Anthropic models, and
+   * the question the Client gets carries them.
+   */
+  optionDescriptions?: string[]
+}
+
+/** The AskUser call's input: Claude Code's shape when options are described. */
+function askUserInput(
+  options: Pick<AskUserTurnOptions, 'question' | 'options' | 'multiSelect' | 'optionDescriptions'>,
+): Record<string, unknown> | undefined {
+  const descriptions = options.optionDescriptions
+  if (!descriptions) return undefined
+  return {
+    questions: [
+      {
+        question: options.question,
+        header: 'Choice',
+        options: options.options.map((label, i) => ({ label, description: descriptions[i] ?? '' })),
+        multiSelect: options.multiSelect ?? false,
+      },
+    ],
+  }
 }
 
 /** Handler for `daemon.add_user_message` where the agent asks the user a question first. */
@@ -429,7 +453,7 @@ export function askUserTurn(options: AskUserTurnOptions): MethodHandler {
       const toolUseId = `call_${randomUUID().slice(0, 8)}`
       daemon.notify(sessionId, {
         type: 'tool_call',
-        toolUse: { type: 'tool_use', id: toolUseId, name: 'AskUser', input: {} },
+        toolUse: { type: 'tool_use', id: toolUseId, name: 'AskUser', input: askUserInput(options) ?? {} },
       })
       daemon.notify(sessionId, {
         type: 'droid_working_state_changed',
@@ -444,6 +468,7 @@ export function askUserTurn(options: AskUserTurnOptions): MethodHandler {
             topic: 'Choice',
             question: options.question,
             options: options.options,
+            ...(options.optionDescriptions ? { optionDescriptions: options.optionDescriptions } : {}),
             ...(options.multiSelect ? { multiSelect: true } : {}),
           },
         ],
@@ -485,6 +510,8 @@ export interface QueuedAskUserTurnOptions {
   context: string
   /** What the agent streams while the question waits. */
   reply: string
+  /** As AskUserTurnOptions.optionDescriptions. */
+  optionDescriptions?: string[]
 }
 
 /**
@@ -510,7 +537,9 @@ export function queuedAskUserTurn(options: QueuedAskUserTurnOptions): MethodHand
         id: toolUseId,
         name: 'AskUser',
         input: {
-          questionnaire: `1. [question] ${question}\n[topic] Choice\n${options.options.map((o) => `[option] ${o}`).join('\n')}`,
+          ...(askUserInput(options) ?? {
+            questionnaire: `1. [question] ${question}\n[topic] Choice\n${options.options.map((o) => `[option] ${o}`).join('\n')}`,
+          }),
           blocking: false,
           context: options.context,
         },
@@ -533,7 +562,15 @@ export function queuedAskUserTurn(options: QueuedAskUserTurnOptions): MethodHand
       const asked = daemon.request('daemon.ask_user', {
         sessionId,
         toolCallId: toolUseId,
-        questions: [{ index: 1, topic: 'Choice', question, options: options.options }],
+        questions: [
+          {
+            index: 1,
+            topic: 'Choice',
+            question,
+            options: options.options,
+            ...(options.optionDescriptions ? { optionDescriptions: options.optionDescriptions } : {}),
+          },
+        ],
         blocking: false,
         context: options.context,
       })

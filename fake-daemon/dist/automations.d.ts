@@ -5,6 +5,15 @@ export interface AutomationRunFixture {
     startedAt: string;
     completedAt?: string;
     type?: 'run' | 'create';
+    errorMessage?: string;
+    /** droid 1.2's classification of a failure. */
+    failureReason?: string;
+    /** A user's change of the outcome (droid 1.2); status is the changed one. */
+    outcomeOverride?: {
+        originalStatus: string;
+        changedBy: string;
+        note?: string;
+    };
 }
 export interface AutomationFixture {
     id: string;

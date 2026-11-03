@@ -35,8 +35,21 @@ type SessionSpec = {
 type TurnSpec =
   | { kind: 'reply'; deltas: string[]; delayMs?: number }
   | { kind: 'permission'; command: string; reply: string; toolOutput?: string }
-  | { kind: 'askUser'; question: string; options: string[]; multiSelect?: boolean }
-  | { kind: 'queuedAskUser'; question: string; options: string[]; context: string; reply: string }
+  | {
+      kind: 'askUser'
+      question: string
+      options: string[]
+      multiSelect?: boolean
+      optionDescriptions?: string[]
+    }
+  | {
+      kind: 'queuedAskUser'
+      question: string
+      options: string[]
+      context: string
+      reply: string
+      optionDescriptions?: string[]
+    }
   | {
       kind: 'todo'
       todos: Array<{ id: string; content: string; status: 'pending' | 'in_progress' | 'completed' }>

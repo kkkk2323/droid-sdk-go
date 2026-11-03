@@ -5,7 +5,7 @@ protocol that Factory's TypeScript SDK (`@factory/droid-sdk`) speaks. Pure Go,
 no Node at run time.
 
 Checked against `droid daemon` 0.233.0 (protocol 1.245.0); types generated from
-`@factory/droid-sdk` 0.10.0 (protocol 1.269.0), plus what droid 1.0 and 1.1
+`@factory/droid-sdk` 0.10.0 (protocol 1.269.0), plus what droid 1.0, 1.1 and 1.2
 add that it lacks (see "Upgrading" below).
 
 ```sh
@@ -19,7 +19,7 @@ the Fake Daemon below.
 
 | Package        | What it is                                                                                                                                                                                                                                                                           | Written by         |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
-| `protocol`     | Every type of the protocol (831), method and notification names, per-method ack/timeout table                                                                                                                                                                                        | generated (`gen/`) |
+| `protocol`     | Every type of the protocol (832), method and notification names, per-method ack/timeout table                                                                                                                                                                                        | generated (`gen/`) |
 | `droid` (root) | `Client`: one authenticated connection; a typed method for each of the 148 RPCs (`zz_client_methods.go`, generated), `Call`, `Subscribe`, `Handle`/`HandleLater`/`Respond` for the Daemon's own requests, frame recording                                                            | hand               |
 | `controller`   | Connects and authenticates, reconnects and reloads Sessions, loads a Session before a call that needs its worker, tracks permission and AskUser prompts (keeping an answer given while a worker is gone until it is back), feeds the store. Port of the TS `DaemonSessionController` | hand               |
 | `session`      | The Sessions' state: transcript built from streamed deltas, working state, settings, token usage, todos, queued and optimistic messages, subagents, display filtering. Port of the TS `MultiSessionStateManager`/`SessionStateManager`/`SessionStore`. No I/O                        | hand               |
@@ -125,6 +125,18 @@ store subscriber must not block.
   they stay shown; the reload's `pendingMessageRequestIds` keeps the ones
   the Daemon admitted and drops the rest, and none of them is sent again.
   Messages carry `seq`, the order the store keeps them in.
+- AskUser option descriptions (droid 1.2): an Anthropic model may ask in
+  Claude Code's AskUserQuestion shape (`questions[].options[].{label,
+  description}`, behind Factory's `claude_question_option_descriptions`
+  flag). The AskUser tool call's input then has `questions` and no
+  `questionnaire`, and each question of `daemon.ask_user` carries
+  `optionDescriptions`, index-aligned with `options`.
+- A Session seeded from another one (droid 1.2's `seed` on
+  `initialize_session`) can start with a trailing window of the copied
+  history: initialize's `hasOlderMessages`, kept by the store as load's is.
+- Automation run history (droid 1.2) carries `failureReason` and, when a
+  user changed a run's outcome, `outcomeOverride` (the recorded outcome and
+  who changed it); `status` is the changed outcome.
 
 ## Fake Daemon
 
@@ -138,7 +150,8 @@ instead of running an agent, and checks every message it sends with
 - **Go:** `fakedaemon.Start(t, scenario)` runs it in Node and gives its URL.
   The package embeds the Fake Daemon bundled into one script
   (`fakedaemon/fake-daemon.mjs`), so a test needs only `node` on PATH.
-  `fakedaemon.Turn` scripts the agent: a reply, a permission, AskUser (blocking or queued), a
+  `fakedaemon.Turn` scripts the agent: a reply, a permission, AskUser (blocking or queued,
+  with droid 1.2's option descriptions), a
   todo list, structured output, `spec` (ExitSpecMode and its handoff, as
   droid 0.244 does them), or `backgroundProcess` (an Execute left running in
   the background, with droid 1.0's launch text, `background_processes_changed`
@@ -195,12 +208,15 @@ generated structs in `NEWER_FIELDS`, whole types in `NEWER_TYPES` and
 methods in `NEWER_METHODS`; generation fails once a release has one of
 them itself. Against 0.10.0 they are:
 
-- `NEWER_FIELDS`: `blocking` and `context` on AskUser and on load's
-  pending AskUser requests (droid 1.1); `behavesLikeModelId` on
+- `NEWER_FIELDS`: `optionDescriptions` on `AskUserQuestion`,
+  `hasOlderMessages` on the initialize result, `failureReason` and
+  `outcomeOverride` on `AutomationRunRecord` (droid 1.2); `blocking` and
+  `context` on AskUser and on load's pending AskUser requests (droid 1.1); `behavesLikeModelId` on
   `ModelMetadata` (droid 1.1); `backgroundWork` on
   `droid_working_state_changed` and on the load result, and the load
   result's `backgroundProcesses` (droid 1.0).
-- `NEWER_TYPES`: `SessionBackgroundProcess`,
+- `NEWER_TYPES`: `AutomationRunOutcomeOverride` (droid 1.2),
+  `SessionBackgroundProcess`,
   `SessionBackgroundProcessesSnapshot`,
   `BackgroundProcessesChangedNotification`, and the params and result of
   `daemon.kill_background_process` (droid 1.0).

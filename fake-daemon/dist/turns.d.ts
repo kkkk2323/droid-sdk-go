@@ -66,6 +66,12 @@ export interface AskUserTurnOptions {
     question: string;
     options: string[];
     multiSelect?: boolean;
+    /**
+     * What each option means, index-aligned. With them the agent asks in Claude
+     * Code's AskUserQuestion shape, as droid 1.2 does for Anthropic models, and
+     * the question the Client gets carries them.
+     */
+    optionDescriptions?: string[];
 }
 /** Handler for `daemon.add_user_message` where the agent asks the user a question first. */
 export declare function askUserTurn(options: AskUserTurnOptions): MethodHandler;
@@ -76,6 +82,8 @@ export interface QueuedAskUserTurnOptions {
     context: string;
     /** What the agent streams while the question waits. */
     reply: string;
+    /** As AskUserTurnOptions.optionDescriptions. */
+    optionDescriptions?: string[];
 }
 /**
  * Handler for `daemon.add_user_message` where the agent queues a question
