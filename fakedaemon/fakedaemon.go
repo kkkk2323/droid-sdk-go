@@ -86,6 +86,11 @@ type Turn struct {
 	Title       string         `json:"title,omitempty"`
 	Pid         int            `json:"pid,omitempty"`
 	OutputFile  string         `json:"outputFile,omitempty"`
+	// OptionDescriptions explain Options, index-aligned. With them an
+	// askUser or queuedAskUser turn asks in Claude Code's AskUserQuestion
+	// shape and its question carries them, as droid 1.2 does for Anthropic
+	// models.
+	OptionDescriptions []string `json:"optionDescriptions,omitempty"`
 }
 
 // Todo is an item of a todo turn's list.

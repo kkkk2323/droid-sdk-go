@@ -38380,7 +38380,10 @@ function automationHandlers(input2, sessions) {
           type: r.type ?? "run",
           status: r.status,
           startedAt: r.startedAt,
-          ...r.completedAt ? { completedAt: r.completedAt } : {}
+          ...r.completedAt ? { completedAt: r.completedAt } : {},
+          ...r.errorMessage ? { errorMessage: r.errorMessage } : {},
+          ...r.failureReason ? { failureReason: r.failureReason } : {},
+          ...r.outcomeOverride ? { outcomeOverride: r.outcomeOverride } : {}
         })),
         totalCount: runs.length
       };
@@ -39961,6 +39964,20 @@ function permissionTurn(options) {
     return {};
   };
 }
+function askUserInput(options) {
+  const descriptions = options.optionDescriptions;
+  if (!descriptions) return void 0;
+  return {
+    questions: [
+      {
+        question: options.question,
+        header: "Choice",
+        options: options.options.map((label, i) => ({ label, description: descriptions[i] ?? "" })),
+        multiSelect: options.multiSelect ?? false
+      }
+    ]
+  };
+}
 function askUserTurn(options) {
   return (params, context, request) => {
     const sessionId = String(params["sessionId"]);
@@ -39971,7 +39988,7 @@ function askUserTurn(options) {
       const toolUseId = `call_${randomUUID5().slice(0, 8)}`;
       daemon2.notify(sessionId, {
         type: "tool_call",
-        toolUse: { type: "tool_use", id: toolUseId, name: "AskUser", input: {} }
+        toolUse: { type: "tool_use", id: toolUseId, name: "AskUser", input: askUserInput(options) ?? {} }
       });
       daemon2.notify(sessionId, {
         type: "droid_working_state_changed",
@@ -39986,6 +40003,7 @@ function askUserTurn(options) {
             topic: "Choice",
             question: options.question,
             options: options.options,
+            ...options.optionDescriptions ? { optionDescriptions: options.optionDescriptions } : {},
             ...options.multiSelect ? { multiSelect: true } : {}
           }
         ]
@@ -40033,9 +40051,11 @@ function queuedAskUserTurn(options) {
         id: toolUseId,
         name: "AskUser",
         input: {
-          questionnaire: `1. [question] ${question}
+          ...askUserInput(options) ?? {
+            questionnaire: `1. [question] ${question}
 [topic] Choice
-${options.options.map((o) => `[option] ${o}`).join("\n")}`,
+${options.options.map((o) => `[option] ${o}`).join("\n")}`
+          },
           blocking: false,
           context: options.context
         }
@@ -40056,7 +40076,15 @@ ${options.options.map((o) => `[option] ${o}`).join("\n")}`,
       const asked = daemon2.request("daemon.ask_user", {
         sessionId,
         toolCallId: toolUseId,
-        questions: [{ index: 1, topic: "Choice", question, options: options.options }],
+        questions: [
+          {
+            index: 1,
+            topic: "Choice",
+            question,
+            options: options.options,
+            ...options.optionDescriptions ? { optionDescriptions: options.optionDescriptions } : {}
+          }
+        ],
         blocking: false,
         context: options.context
       });

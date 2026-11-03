@@ -328,6 +328,22 @@ export function permissionTurn(options) {
         return {};
     };
 }
+/** The AskUser call's input: Claude Code's shape when options are described. */
+function askUserInput(options) {
+    const descriptions = options.optionDescriptions;
+    if (!descriptions)
+        return undefined;
+    return {
+        questions: [
+            {
+                question: options.question,
+                header: 'Choice',
+                options: options.options.map((label, i) => ({ label, description: descriptions[i] ?? '' })),
+                multiSelect: options.multiSelect ?? false,
+            },
+        ],
+    };
+}
 /** Handler for `daemon.add_user_message` where the agent asks the user a question first. */
 export function askUserTurn(options) {
     return (params, context, request) => {
@@ -339,7 +355,7 @@ export function askUserTurn(options) {
             const toolUseId = `call_${randomUUID().slice(0, 8)}`;
             daemon.notify(sessionId, {
                 type: 'tool_call',
-                toolUse: { type: 'tool_use', id: toolUseId, name: 'AskUser', input: {} },
+                toolUse: { type: 'tool_use', id: toolUseId, name: 'AskUser', input: askUserInput(options) ?? {} },
             });
             daemon.notify(sessionId, {
                 type: 'droid_working_state_changed',
@@ -354,6 +370,7 @@ export function askUserTurn(options) {
                         topic: 'Choice',
                         question: options.question,
                         options: options.options,
+                        ...(options.optionDescriptions ? { optionDescriptions: options.optionDescriptions } : {}),
                         ...(options.multiSelect ? { multiSelect: true } : {}),
                     },
                 ],
@@ -409,7 +426,9 @@ export function queuedAskUserTurn(options) {
                 id: toolUseId,
                 name: 'AskUser',
                 input: {
-                    questionnaire: `1. [question] ${question}\n[topic] Choice\n${options.options.map((o) => `[option] ${o}`).join('\n')}`,
+                    ...(askUserInput(options) ?? {
+                        questionnaire: `1. [question] ${question}\n[topic] Choice\n${options.options.map((o) => `[option] ${o}`).join('\n')}`,
+                    }),
                     blocking: false,
                     context: options.context,
                 },
@@ -432,7 +451,15 @@ export function queuedAskUserTurn(options) {
             const asked = daemon.request('daemon.ask_user', {
                 sessionId,
                 toolCallId: toolUseId,
-                questions: [{ index: 1, topic: 'Choice', question, options: options.options }],
+                questions: [
+                    {
+                        index: 1,
+                        topic: 'Choice',
+                        question,
+                        options: options.options,
+                        ...(options.optionDescriptions ? { optionDescriptions: options.optionDescriptions } : {}),
+                    },
+                ],
                 blocking: false,
                 context: options.context,
             });

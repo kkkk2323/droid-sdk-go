@@ -87,6 +87,9 @@ export function automationHandlers(input, sessions) {
                     status: r.status,
                     startedAt: r.startedAt,
                     ...(r.completedAt ? { completedAt: r.completedAt } : {}),
+                    ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
+                    ...(r.failureReason ? { failureReason: r.failureReason } : {}),
+                    ...(r.outcomeOverride ? { outcomeOverride: r.outcomeOverride } : {}),
                 })),
                 totalCount: runs.length,
             };

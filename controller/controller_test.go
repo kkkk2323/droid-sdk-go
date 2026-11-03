@@ -175,6 +175,29 @@ func TestAskUserTurn(t *testing.T) {
 	}
 }
 
+// droid 1.2 asks an Anthropic model's questions with a description per option.
+func TestAskUserTurnWithOptionDescriptions(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+		Turn: &fakedaemon.Turn{Kind: "askUser", Question: "Which database?", Options: []string{"Postgres", "SQLite"},
+			OptionDescriptions: []string{"A server, for many writers.", "One file, no server."}},
+	})
+	c, r := start(t, d, controller.Config{})
+	ctx := context.Background()
+	id := d.Sessions[0].SessionID
+	if _, err := c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddUserMessage(ctx, protocol.AddUserMessageParams{SessionID: id, Text: "Set up storage"}); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := r.wait(t, 0, "AskUser requested", func(e controller.Event) bool { _, ok := e.(controller.AskUserRequested); return ok })
+	a := e.(controller.AskUserRequested).AskUser
+	if len(a.Questions) != 1 || strings.Join(a.Questions[0].OptionDescriptions, "|") != "A server, for many writers.|One file, no server." {
+		t.Fatalf("questions: %+v", a.Questions)
+	}
+}
+
 func TestQueuedAskUserTurn(t *testing.T) {
 	d := fakedaemon.Start(t, fakedaemon.Scenario{
 		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
