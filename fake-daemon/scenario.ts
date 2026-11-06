@@ -251,7 +251,7 @@ export function createScenario(input: ScenarioInput): Scenario {
     }),
     'daemon.update_session_settings': (params, context) => {
       const found = mustFind(sessions, params['sessionId'])
-      if (found.inactive) throw new Error('No active session found for ID')
+      if (found.inactive) throw new RpcError(-32603, 'No active session found for ID')
       const { sessionId: _ignored, ...patch } = params
       found.settings = { ...sessionSettings(), ...found.settings, ...patch }
       if (Array.isArray(patch['tags'])) found.tags = patch['tags'] as SessionFixture['tags']
@@ -531,12 +531,14 @@ export function createScenario(input: ScenarioInput): Scenario {
         warnings: [],
       }
     },
-    // Like the real Daemon, closing a Session nobody wrote to deletes it.
-    'daemon.close_session': (params) => {
+    // Like the real Daemon, closing a Session nobody wrote to deletes it, and
+    // every Client attached to the Session hears that it closed.
+    'daemon.close_session': (params, context) => {
       const index = sessions.findIndex((s) => s.sessionId === params['sessionId'])
       const found = sessions[index]
       if (found && found.messages.length === 0) sessions.splice(index, 1)
       else if (found) found.inactive = true
+      if (found) context.daemon.notify(found.sessionId, { type: 'session_closed', timestamp: Date.now() })
       return {}
     },
     // `/compact` is a handoff: the summary starts a new Session that carries
@@ -599,7 +601,7 @@ export function createScenario(input: ScenarioInput): Scenario {
     },
     'daemon.load_session': async (params, context) => {
       const found = sessions.find((s) => s.sessionId === params['sessionId'])
-      if (!found) throw new Error(`Scenario has no session ${String(params['sessionId'])}`)
+      if (!found) throw new RpcError(-32004, `Session not found: ${String(params['sessionId'])}`)
       if (input.loadDelayMs) await new Promise((resolve) => setTimeout(resolve, input.loadDelayMs))
       delete found.inactive
       // Like the real Daemon, a load hands the Client the permission requests
@@ -658,7 +660,8 @@ export function createScenario(input: ScenarioInput): Scenario {
     async handle(request, context) {
       const handler = handlers[request.method]
       if (!handler) {
-        throw new Error(
+        throw new RpcError(
+          -32601,
           `Scenario has no handler for ${request.method}. Params: ${JSON.stringify(request.params).slice(0, 300)}`,
         )
       }
@@ -738,7 +741,7 @@ function removeWorktree(sessions: SessionFixture[], path: string, context: Handl
 
 function mustFind(sessions: SessionFixture[], sessionId: unknown): SessionFixture {
   const found = sessions.find((s) => s.sessionId === sessionId)
-  if (!found) throw new Error(`Scenario has no session ${String(sessionId)}`)
+  if (!found) throw new RpcError(-32004, `Session not found: ${String(sessionId)}`)
   return found
 }
 

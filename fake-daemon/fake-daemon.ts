@@ -444,22 +444,22 @@ export class FakeDaemon {
       return
     }
 
+    let result: unknown
     try {
-      const result = await this.scenario.handle(request, { daemon: this, connectionId })
-      this.#send(ws, rpcResponse(request, result))
+      result = await this.scenario.handle(request, { daemon: this, connectionId })
     } catch (error) {
-      if (error instanceof RpcError) {
-        this.#send(ws, {
-          jsonrpc: '2.0',
-          factoryApiVersion: '1.0.0',
-          type: 'response',
-          id: request.id,
-          error: { code: error.code, message: error.message },
-        })
-        return
-      }
-      throw error
+      const code = error instanceof RpcError ? error.code : -32603
+      const message = error instanceof Error ? error.message : String(error)
+      this.#send(ws, {
+        jsonrpc: '2.0',
+        factoryApiVersion: '1.0.0',
+        type: 'response',
+        id: request.id,
+        error: { code, message },
+      })
+      return
     }
+    this.#send(ws, rpcResponse(request, result))
   }
 
   #broadcast(message: Record<string, unknown>): void {

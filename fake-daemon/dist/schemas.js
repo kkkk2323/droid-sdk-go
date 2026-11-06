@@ -134,6 +134,13 @@ const SessionInactivityParams = z.object({
         timeoutSeconds: z.number(),
     }),
 });
+const SessionClosedParams = z.object({
+    sessionId: z.string(),
+    notification: z.object({
+        type: z.literal('session_closed'),
+        timestamp: z.number(),
+    }),
+});
 // Newer than the SDK's schemas: droid 0.244 sends it when the Client starts a
 // spec handoff's Session.
 const SpecHandoffSessionCreatedParams = z.object({
@@ -191,7 +198,7 @@ function either(first, ...rest) {
     };
 }
 const NOTIFICATION_SCHEMAS = {
-    'daemon.session_notification': either(SessionNotificationParamsSchema, SessionInactivityParams, SpecHandoffSessionCreatedParams, AskUserResolvedParams, ChildSessionSettledParams, BackgroundProcessesChangedParams),
+    'daemon.session_notification': either(SessionNotificationParamsSchema, SessionInactivityParams, SessionClosedParams, SpecHandoffSessionCreatedParams, AskUserResolvedParams, ChildSessionSettledParams, BackgroundProcessesChangedParams),
     'daemon.connection_status': ConnectionStatusParams,
     'daemon.session.archive_state_changed': z.object({
         sessionId: z.string(),
