@@ -38190,6 +38190,13 @@ var SessionInactivityParams = external_exports2.object({
     timeoutSeconds: external_exports2.number()
   })
 });
+var SessionClosedParams = external_exports2.object({
+  sessionId: external_exports2.string(),
+  notification: external_exports2.object({
+    type: external_exports2.literal("session_closed"),
+    timestamp: external_exports2.number()
+  })
+});
 var SpecHandoffSessionCreatedParams = external_exports2.object({
   sessionId: external_exports2.string(),
   notification: external_exports2.object({
@@ -38247,6 +38254,7 @@ var NOTIFICATION_SCHEMAS = {
   "daemon.session_notification": either(
     SessionNotificationParamsSchema2,
     SessionInactivityParams,
+    SessionClosedParams,
     SpecHandoffSessionCreatedParams,
     AskUserResolvedParams,
     ChildSessionSettledParams,
@@ -38842,7 +38850,7 @@ function createScenario(input2) {
     }),
     "daemon.update_session_settings": (params, context) => {
       const found = mustFind(sessions, params["sessionId"]);
-      if (found.inactive) throw new Error("No active session found for ID");
+      if (found.inactive) throw new RpcError(-32603, "No active session found for ID");
       const { sessionId: _ignored, ...patch } = params;
       found.settings = { ...sessionSettings(), ...found.settings, ...patch };
       if (Array.isArray(patch["tags"])) found.tags = patch["tags"];
@@ -39097,12 +39105,14 @@ function createScenario(input2) {
         warnings: []
       };
     },
-    // Like the real Daemon, closing a Session nobody wrote to deletes it.
-    "daemon.close_session": (params) => {
+    // Like the real Daemon, closing a Session nobody wrote to deletes it, and
+    // every Client attached to the Session hears that it closed.
+    "daemon.close_session": (params, context) => {
       const index = sessions.findIndex((s) => s.sessionId === params["sessionId"]);
       const found = sessions[index];
       if (found && found.messages.length === 0) sessions.splice(index, 1);
       else if (found) found.inactive = true;
+      if (found) context.daemon.notify(found.sessionId, { type: "session_closed", timestamp: Date.now() });
       return {};
     },
     // `/compact` is a handoff: the summary starts a new Session that carries
@@ -39163,7 +39173,7 @@ function createScenario(input2) {
     },
     "daemon.load_session": async (params, context) => {
       const found = sessions.find((s) => s.sessionId === params["sessionId"]);
-      if (!found) throw new Error(`Scenario has no session ${String(params["sessionId"])}`);
+      if (!found) throw new RpcError(-32004, `Session not found: ${String(params["sessionId"])}`);
       if (input2.loadDelayMs) await new Promise((resolve) => setTimeout(resolve, input2.loadDelayMs));
       delete found.inactive;
       const pendingPermissions = context.daemon.pendingRequests("daemon.request_permission", found.sessionId).map(({ id, params: asked }) => ({
@@ -39207,7 +39217,8 @@ function createScenario(input2) {
     async handle(request, context) {
       const handler2 = handlers[request.method];
       if (!handler2) {
-        throw new Error(
+        throw new RpcError(
+          -32601,
           `Scenario has no handler for ${request.method}. Params: ${JSON.stringify(request.params).slice(0, 300)}`
         );
       }
@@ -39260,7 +39271,7 @@ function removeWorktree(sessions, path, context) {
 }
 function mustFind(sessions, sessionId) {
   const found = sessions.find((s) => s.sessionId === sessionId);
-  if (!found) throw new Error(`Scenario has no session ${String(sessionId)}`);
+  if (!found) throw new RpcError(-32004, `Session not found: ${String(sessionId)}`);
   return found;
 }
 function loadSessionResult(fixture, messageLimit = void 0) {
@@ -39721,22 +39732,22 @@ var FakeDaemon = class _FakeDaemon {
       });
       return;
     }
+    let result;
     try {
-      const result = await this.scenario.handle(request, { daemon: this, connectionId });
-      this.#send(ws, rpcResponse(request, result));
+      result = await this.scenario.handle(request, { daemon: this, connectionId });
     } catch (error62) {
-      if (error62 instanceof RpcError) {
-        this.#send(ws, {
-          jsonrpc: "2.0",
-          factoryApiVersion: "1.0.0",
-          type: "response",
-          id: request.id,
-          error: { code: error62.code, message: error62.message }
-        });
-        return;
-      }
-      throw error62;
+      const code = error62 instanceof RpcError ? error62.code : -32603;
+      const message2 = error62 instanceof Error ? error62.message : String(error62);
+      this.#send(ws, {
+        jsonrpc: "2.0",
+        factoryApiVersion: "1.0.0",
+        type: "response",
+        id: request.id,
+        error: { code, message: message2 }
+      });
+      return;
     }
+    this.#send(ws, rpcResponse(request, result));
   }
   #broadcast(message) {
     for (const ws of this.#connections.values()) this.#send(ws, message);

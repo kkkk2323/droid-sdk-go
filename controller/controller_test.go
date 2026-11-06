@@ -894,3 +894,55 @@ func TestAResumedSubagentIsLoadedAgain(t *testing.T) {
 	finish()
 	status(protocol.TaskInvocationStatusCompleted)
 }
+
+// Closing a Session broadcasts session_closed, so every attached Client
+// drops it from its Store; a written Session stays on the Daemon to be
+// loaded again, while an unwritten draft is deleted and loading it answers
+// ErrSessionNotFound (-32004) without crashing the Fake Daemon.
+func TestClosingASessionNotifiesSessionClosedAndDropsItFromTheStore(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web", Messages: []fakedaemon.Message{{Role: "user", Text: "hi"}}}},
+	})
+	c1, r1 := start(t, d, controller.Config{})
+	c2, _ := start(t, d, controller.Config{})
+	ctx := context.Background()
+	id := d.Sessions[0].SessionID
+	if _, err := c1.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c2.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.CloseSession(ctx, protocol.CloseSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	r1.wait(t, 0, "session_closed on c1", func(e controller.Event) bool {
+		n, ok := e.(controller.SessionNotification)
+		if !ok || n.SessionID != id {
+			return false
+		}
+		_, ok = n.Value.(*protocol.SessionClosedNotification)
+		return ok
+	})
+	if c1.Store().Session(id) != nil {
+		t.Fatal("c1's Store still holds the closed Session")
+	}
+	if _, err := c1.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatalf("reload closed Session: %v", err)
+	}
+
+	draft, err := c2.InitializeSession(ctx, protocol.InitializeSessionParams{Cwd: "/Users/dev/acme-web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.CloseSession(ctx, protocol.CloseSessionParams{SessionID: draft.SessionID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c1.LoadSession(ctx, protocol.LoadSessionParams{SessionID: draft.SessionID}); !errors.Is(err, controller.ErrSessionNotFound) {
+		t.Fatalf("load closed draft: %v, want ErrSessionNotFound", err)
+	}
+	r1.wait(t, 0, "SessionNotFound for the deleted draft", func(e controller.Event) bool {
+		nf, ok := e.(controller.SessionNotFound)
+		return ok && nf.SessionID == draft.SessionID
+	})
+}
