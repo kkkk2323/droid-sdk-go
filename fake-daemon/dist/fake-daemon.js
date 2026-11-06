@@ -139,6 +139,9 @@ export class FakeDaemon {
     /** Simulate the Daemon process dying: sockets drop and upgrades fail. */
     goDown() {
         this.#down = true;
+        // A Daemon that dies takes the working states it kept for its Sessions
+        // with it; the ones it loads again report idle, as droid 1.4.1's do.
+        this.#workingStates.clear();
         for (const ws of this.#connections.values())
             ws.terminate();
     }
