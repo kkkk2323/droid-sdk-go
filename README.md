@@ -137,6 +137,14 @@ store subscriber must not block.
 - Automation run history (droid 1.2) carries `failureReason` and, when a
   user changed a run's outcome, `outcomeOverride` (the recorded outcome and
   who changed it); `status` is the changed outcome.
+- `daemon.get_session_turn_outcome` (seen on droid 1.4.1) reads a turn's
+  outcome from the Session's transcript once, `timeoutMs` bounding the
+  read: it does not wait for a turn still running. The turn id is its
+  prompt's message id. `available` carries the outcome (`resultKind`
+  `text` for a turn without structured output) and `finalOutput`, the text
+  of the last reply after the prompt; `unavailable` says
+  `session_not_found` (no transcript), `turn_unverified` (no outcome for
+  that prompt yet, or no such prompt) or `deadline_exceeded`.
 
 ## Fake Daemon
 
@@ -157,7 +165,11 @@ instead of running an agent, and checks every message it sends with
   the background, with droid 1.0's launch text, `background_processes_changed`
   and `daemon.kill_background_process`). Its `load_session` reports the
   scripted turn's state: the agent loop running, held messages
-  (`queuedMessages`), `pendingMessageRequestIds` and background processes.
+  (`queuedMessages`), `pendingMessageRequestIds`, background processes and
+  the permission requests no Client answered yet (`pendingPermissions`).
+  `daemon.get_session_turn_outcome` answers from the turns it ran, or a
+  test made up with `Notify` (a user message, then `agent_turn_completed`
+  with its id), as droid 1.4.1 reads them from the transcript.
 - **TypeScript:** the npm package `@droi/fake-daemon` (`fake-daemon/`, with its
   built `dist/`), installed from this repository's tag:
 

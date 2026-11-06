@@ -15,6 +15,12 @@ export interface RecordedRequest {
     params: unknown;
     id: string | number | null;
 }
+/** How a turn ended, as the Daemon writes it into the Session's transcript. */
+export interface TurnOutcome {
+    reason: string;
+    /** The text of the turn's last reply; empty when it replied none. */
+    finalOutput: string;
+}
 export declare class FakeDaemon {
     #private;
     /** The Droi version /meta answers from now on; a Client compares it with its own. */
@@ -47,6 +53,20 @@ export declare class FakeDaemon {
     waitForRequest(method: string, nth?: number, timeoutMs?: number): Promise<RecordedRequest>;
     /** Push a Session notification to every connection. */
     notify(sessionId: string, notification: Record<string, unknown>): void;
+    /**
+     * How a Session's turn ended and its last reply, as droid 1.4.1's
+     * daemon.get_session_turn_outcome reads them from the transcript: none for a
+     * turn still running, or one whose prompt the transcript does not have.
+     */
+    turnOutcome(sessionId: string, turnId: string): TurnOutcome | undefined;
+    /**
+     * The requests of a method the Daemon sent about a Session that no Client
+     * answered yet, as daemon.load_session reports them.
+     */
+    pendingRequests(method: string, sessionId: string): Array<{
+        id: string;
+        params: Record<string, unknown>;
+    }>;
     /** A Daemon-level notification, such as daemon.worktree.removed. */
     notifyDaemon(method: string, params: Record<string, unknown>): void;
     /** Daemon-level (not Session-level) notification about archive state. */
