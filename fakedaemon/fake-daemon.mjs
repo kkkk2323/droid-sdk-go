@@ -39523,6 +39523,7 @@ var FakeDaemon = class _FakeDaemon {
   /** Simulate the Daemon process dying: sockets drop and upgrades fail. */
   goDown() {
     this.#down = true;
+    this.#workingStates.clear();
     for (const ws of this.#connections.values()) ws.terminate();
   }
   /** Simulate the Desktop Shell restarting the Daemon. */
