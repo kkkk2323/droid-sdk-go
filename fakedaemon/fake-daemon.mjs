@@ -38158,7 +38158,28 @@ var RESULT_SCHEMAS = {
   "daemon.hold_session_crons": external_exports2.object({ heldCount: external_exports2.number().int().nonnegative() }),
   "daemon.resume_session_crons": external_exports2.object({ resumedCount: external_exports2.number().int().nonnegative() }),
   // Newer than the SDK's schemas (droid 1.0).
-  "daemon.kill_background_process": external_exports2.object({ killed: external_exports2.boolean() })
+  "daemon.kill_background_process": external_exports2.object({ killed: external_exports2.boolean() }),
+  // Newer than the SDK's schemas (droid 1.4.1).
+  "daemon.get_session_turn_outcome": external_exports2.discriminatedUnion("status", [
+    external_exports2.object({
+      status: external_exports2.literal("available"),
+      sessionId: external_exports2.string(),
+      turnId: external_exports2.string(),
+      outcome: external_exports2.object({
+        type: external_exports2.literal("agent_turn_outcome"),
+        turnId: external_exports2.string().min(1),
+        reason: external_exports2.string(),
+        resultKind: external_exports2.literal("text")
+      }),
+      finalOutput: external_exports2.string()
+    }),
+    external_exports2.object({
+      status: external_exports2.literal("unavailable"),
+      sessionId: external_exports2.string(),
+      turnId: external_exports2.string(),
+      reason: external_exports2.enum(["session_not_found", "turn_unverified", "deadline_exceeded"])
+    })
+  ])
 };
 var SessionInactivityParams = external_exports2.object({
   sessionId: external_exports2.string(),
@@ -39122,11 +39143,35 @@ function createScenario(input2) {
         ...start > 0 ? { nextCursor: page[page.length - 1].id } : {}
       };
     },
-    "daemon.load_session": async (params) => {
+    // The real Daemon reads the turn's end out of the Session's transcript,
+    // once, as droid 1.4.1 does: it does not wait for a turn still running.
+    "daemon.get_session_turn_outcome": (params, context) => {
+      const sessionId = String(params["sessionId"]);
+      const turnId = String(params["turnId"]);
+      const unavailable = (reason) => ({ status: "unavailable", sessionId, turnId, reason });
+      const found = sessions.find((s) => s.sessionId === sessionId);
+      if (!found || found.unwritten) return unavailable("session_not_found");
+      const outcome = context.daemon.turnOutcome(sessionId, turnId);
+      if (!outcome) return unavailable("turn_unverified");
+      return {
+        status: "available",
+        sessionId,
+        turnId,
+        outcome: { type: "agent_turn_outcome", turnId, reason: outcome.reason, resultKind: "text" },
+        finalOutput: outcome.finalOutput
+      };
+    },
+    "daemon.load_session": async (params, context) => {
       const found = sessions.find((s) => s.sessionId === params["sessionId"]);
       if (!found) throw new Error(`Scenario has no session ${String(params["sessionId"])}`);
       if (input2.loadDelayMs) await new Promise((resolve) => setTimeout(resolve, input2.loadDelayMs));
       delete found.inactive;
+      const pendingPermissions = context.daemon.pendingRequests("daemon.request_permission", found.sessionId).map(({ id, params: asked }) => ({
+        requestId: id,
+        toolUses: asked["toolUses"],
+        options: asked["options"],
+        ...asked["associatedSessionIds"] ? { associatedSessionIds: asked["associatedSessionIds"] } : {}
+      }));
       const subagentInvocations = sessions.flatMap(
         (s) => s.subagent?.callingSessionId === found.sessionId ? [
           {
@@ -39146,7 +39191,8 @@ function createScenario(input2) {
           callingSessionId: found.subagent.callingSessionId,
           callingToolUseId: found.subagent.callingToolUseId
         } : {},
-        ...subagentInvocations.length > 0 ? { subagentInvocations } : {}
+        ...subagentInvocations.length > 0 ? { subagentInvocations } : {},
+        ...pendingPermissions.length > 0 ? { pendingPermissions } : {}
       };
     },
     ...input2.handlers
@@ -39366,7 +39412,12 @@ var FakeDaemon = class _FakeDaemon {
   #nextConnectionId = 1;
   #down = false;
   #tokenRevoked = false;
+  /** The Daemon's own requests (permission, ask-user) no Client answered yet, by id. */
   #pendingClientAnswers = /* @__PURE__ */ new Map();
+  /** What each Session's transcript says of its turns: its messages, in order. */
+  #transcripts = /* @__PURE__ */ new Map();
+  /** How each Session's turns ended, by turn id, as the Daemon writes it into the transcript. */
+  #turnOutcomes = /* @__PURE__ */ new Map();
   constructor(server, wss, port, scenario) {
     this.#server = server;
     this.#wss = wss;
@@ -39522,6 +39573,49 @@ var FakeDaemon = class _FakeDaemon {
       method: "daemon.session_notification",
       params: { sessionId, notification }
     });
+    this.#keepInTranscript(sessionId, notification);
+  }
+  /**
+   * How a Session's turn ended and its last reply, as droid 1.4.1's
+   * daemon.get_session_turn_outcome reads them from the transcript: none for a
+   * turn still running, or one whose prompt the transcript does not have.
+   */
+  turnOutcome(sessionId, turnId) {
+    return this.#turnOutcomes.get(sessionId)?.get(turnId);
+  }
+  /**
+   * The requests of a method the Daemon sent about a Session that no Client
+   * answered yet, as daemon.load_session reports them.
+   */
+  pendingRequests(method, sessionId) {
+    return [...this.#pendingClientAnswers].filter(([, asked]) => asked.method === method && asked.params["sessionId"] === sessionId).map(([id, asked]) => ({ id, params: asked.params }));
+  }
+  /**
+   * Keeps what the Daemon's transcript says of a Session's turns: its
+   * messages, and each turn's end with the last reply after its prompt. A turn
+   * a test makes up with notify counts as one the Fake Daemon ran.
+   */
+  #keepInTranscript(sessionId, notification) {
+    if (notification["type"] === "create_message") {
+      const message = notification["message"];
+      const transcript2 = this.#transcripts.get(sessionId) ?? [];
+      transcript2.push({
+        id: String(message["id"]),
+        role: String(message["role"]),
+        text: textOf(message["content"])
+      });
+      this.#transcripts.set(sessionId, transcript2);
+      return;
+    }
+    const turnId = notification["turnId"];
+    if (notification["type"] !== "agent_turn_completed" || typeof turnId !== "string") return;
+    const transcript = this.#transcripts.get(sessionId) ?? [];
+    const prompt = transcript.findLastIndex((m) => m.id === turnId);
+    if (prompt < 0) return;
+    const reply = transcript.slice(prompt + 1).findLast((m) => m.role === "assistant" && m.text !== "");
+    const outcomes = this.#turnOutcomes.get(sessionId) ?? /* @__PURE__ */ new Map();
+    outcomes.set(turnId, { reason: String(notification["reason"]), finalOutput: reply?.text ?? "" });
+    this.#turnOutcomes.set(sessionId, outcomes);
   }
   /** A Daemon-level notification, such as daemon.worktree.removed. */
   notifyDaemon(method, params) {
@@ -39552,7 +39646,7 @@ var FakeDaemon = class _FakeDaemon {
   request(method, params) {
     const id = randomUUID4();
     const answer = new Promise((resolve) => {
-      this.#pendingClientAnswers.set(id, resolve);
+      this.#pendingClientAnswers.set(id, { method, params, resolve });
     });
     this.#broadcast({
       jsonrpc: "2.0",
@@ -39588,10 +39682,10 @@ var FakeDaemon = class _FakeDaemon {
       throw new Error(`Fake Daemon received non-JSON frame: ${text.slice(0, 200)}`);
     }
     if (message["type"] === "response" && typeof message["id"] === "string") {
-      const resolve = this.#pendingClientAnswers.get(message["id"]);
-      if (resolve) {
+      const asked = this.#pendingClientAnswers.get(message["id"]);
+      if (asked) {
         this.#pendingClientAnswers.delete(message["id"]);
-        resolve(message);
+        asked.resolve(message);
       } else {
         this.#send(ws, {
           jsonrpc: "2.0",
@@ -39659,6 +39753,12 @@ var RpcError = class extends Error {
   }
   code;
 };
+function textOf(content) {
+  if (!Array.isArray(content)) return "";
+  return content.filter(
+    (b) => b?.type === "text" && typeof b.text === "string"
+  ).map((b) => b.text).join("\n");
+}
 function rpcResponse(request, result) {
   return {
     jsonrpc: "2.0",

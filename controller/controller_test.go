@@ -143,6 +143,46 @@ func TestPermissionTurn(t *testing.T) {
 	}
 }
 
+// The Daemon hands a Client that loads a Session the permission requests no
+// Client answered yet (pendingPermissions), and stops once one is answered.
+func TestALoadReportsAPermissionNoClientAnswered(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+		Turn:     &fakedaemon.Turn{Kind: "permission", Command: "npm test", Reply: "All tests pass."},
+	})
+	asker, r := start(t, d, controller.Config{})
+	ctx := context.Background()
+	id := d.Sessions[0].SessionID
+	if _, err := asker.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := asker.AddUserMessage(ctx, protocol.AddUserMessageParams{SessionID: id, Text: "Run the tests"}); err != nil {
+		t.Fatal(err)
+	}
+	e, next := r.wait(t, 0, "permission requested", func(e controller.Event) bool { _, ok := e.(controller.PermissionRequested); return ok })
+	asked := e.(controller.PermissionRequested).Permission
+
+	late, _ := start(t, d, controller.Config{})
+	if _, err := late.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	got := late.PendingPermissions(id)
+	if len(got) != 1 || got[0].RequestID != asked.RequestID || !got[0].Restored ||
+		len(got[0].ToolUses) != 1 || got[0].ToolUses[0].ToolUse.Name != "Execute" || len(got[0].Options) != len(asked.Options) {
+		t.Fatalf("pending after a load: %+v", got)
+	}
+	if err := late.RespondToPermission(ctx, asked.RequestID, controller.PermissionAnswer{SelectedOption: protocol.ToolConfirmationOutcomeProceedOnce}); err != nil {
+		t.Fatal(err)
+	}
+	r.wait(t, next, "turn end", turnEnded)
+	again, _ := start(t, d, controller.Config{})
+	if _, err := again.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if got := again.PendingPermissions(id); len(got) != 0 {
+		t.Fatalf("pending after the answer: %+v", got)
+	}
+}
 func TestAskUserTurn(t *testing.T) {
 	d := fakedaemon.Start(t, fakedaemon.Scenario{
 		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},

@@ -44,6 +44,19 @@ export interface RecordedRequest {
   id: string | number | null
 }
 
+/** How a turn ended, as the Daemon writes it into the Session's transcript. */
+export interface TurnOutcome {
+  reason: string
+  /** The text of the turn's last reply; empty when it replied none. */
+  finalOutput: string
+}
+
+interface TranscriptMessage {
+  id: string
+  role: string
+  text: string
+}
+
 export class FakeDaemon {
   /** The Droi version /meta answers from now on; a Client compares it with its own. */
   static appVersion = '0.0.0'
@@ -67,7 +80,19 @@ export class FakeDaemon {
   #nextConnectionId = 1
   #down = false
   #tokenRevoked = false
-  #pendingClientAnswers = new Map<string, (message: Record<string, unknown>) => void>()
+  /** The Daemon's own requests (permission, ask-user) no Client answered yet, by id. */
+  #pendingClientAnswers = new Map<
+    string,
+    {
+      method: string
+      params: Record<string, unknown>
+      resolve: (message: Record<string, unknown>) => void
+    }
+  >()
+  /** What each Session's transcript says of its turns: its messages, in order. */
+  #transcripts = new Map<string, TranscriptMessage[]>()
+  /** How each Session's turns ended, by turn id, as the Daemon writes it into the transcript. */
+  #turnOutcomes = new Map<string, Map<string, TurnOutcome>>()
 
   private constructor(server: Server, wss: WebSocketServer, port: number, scenario: Scenario) {
     this.#server = server
@@ -240,6 +265,59 @@ export class FakeDaemon {
       method: 'daemon.session_notification',
       params: { sessionId, notification },
     })
+    this.#keepInTranscript(sessionId, notification)
+  }
+
+  /**
+   * How a Session's turn ended and its last reply, as droid 1.4.1's
+   * daemon.get_session_turn_outcome reads them from the transcript: none for a
+   * turn still running, or one whose prompt the transcript does not have.
+   */
+  turnOutcome(sessionId: string, turnId: string): TurnOutcome | undefined {
+    return this.#turnOutcomes.get(sessionId)?.get(turnId)
+  }
+
+  /**
+   * The requests of a method the Daemon sent about a Session that no Client
+   * answered yet, as daemon.load_session reports them.
+   */
+  pendingRequests(
+    method: string,
+    sessionId: string,
+  ): Array<{ id: string; params: Record<string, unknown> }> {
+    return [...this.#pendingClientAnswers]
+      .filter(([, asked]) => asked.method === method && asked.params['sessionId'] === sessionId)
+      .map(([id, asked]) => ({ id, params: asked.params }))
+  }
+
+  /**
+   * Keeps what the Daemon's transcript says of a Session's turns: its
+   * messages, and each turn's end with the last reply after its prompt. A turn
+   * a test makes up with notify counts as one the Fake Daemon ran.
+   */
+  #keepInTranscript(sessionId: string, notification: Record<string, unknown>): void {
+    if (notification['type'] === 'create_message') {
+      const message = notification['message'] as Record<string, unknown>
+      const transcript = this.#transcripts.get(sessionId) ?? []
+      transcript.push({
+        id: String(message['id']),
+        role: String(message['role']),
+        text: textOf(message['content']),
+      })
+      this.#transcripts.set(sessionId, transcript)
+      return
+    }
+    const turnId = notification['turnId']
+    if (notification['type'] !== 'agent_turn_completed' || typeof turnId !== 'string') return
+    const transcript = this.#transcripts.get(sessionId) ?? []
+    const prompt = transcript.findLastIndex((m) => m.id === turnId)
+    if (prompt < 0) return
+    const reply = transcript
+      .slice(prompt + 1)
+      .findLast((m) => m.role === 'assistant' && m.text !== '')
+    const outcomes = this.#turnOutcomes.get(sessionId) ?? new Map<string, TurnOutcome>()
+    outcomes.set(turnId, { reason: String(notification['reason']), finalOutput: reply?.text ?? '' })
+    this.#turnOutcomes.set(sessionId, outcomes)
   }
 
   /** A Daemon-level notification, such as daemon.worktree.removed. */
@@ -279,7 +357,7 @@ export class FakeDaemon {
   } {
     const id = randomUUID()
     const answer = new Promise<Record<string, unknown>>((resolve) => {
-      this.#pendingClientAnswers.set(id, resolve)
+      this.#pendingClientAnswers.set(id, { method, params, resolve })
     })
     this.#broadcast({
       jsonrpc: '2.0',
@@ -323,10 +401,10 @@ export class FakeDaemon {
 
     // Answer from the Client to one of our own requests (permission, ask-user).
     if (message['type'] === 'response' && typeof message['id'] === 'string') {
-      const resolve = this.#pendingClientAnswers.get(message['id'])
-      if (resolve) {
+      const asked = this.#pendingClientAnswers.get(message['id'])
+      if (asked) {
         this.#pendingClientAnswers.delete(message['id'])
-        resolve(message)
+        asked.resolve(message)
       } else {
         // Late answer, exactly what the real Daemon does (ADR 0003).
         this.#send(ws, {
@@ -401,6 +479,17 @@ export class RpcError extends Error {
   ) {
     super(message)
   }
+}
+
+/** The text blocks of a message's content, joined. */
+function textOf(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(
+      (b): b is { type: 'text'; text: string } => b?.type === 'text' && typeof b.text === 'string',
+    )
+    .map((b) => b.text)
+    .join('\n')
 }
 
 function rpcResponse(request: JsonRpcRequest, result: unknown): Record<string, unknown> {

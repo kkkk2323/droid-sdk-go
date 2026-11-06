@@ -579,11 +579,41 @@ export function createScenario(input: ScenarioInput): Scenario {
         ...(start > 0 ? { nextCursor: page[page.length - 1]!.id } : {}),
       }
     },
-    'daemon.load_session': async (params) => {
+    // The real Daemon reads the turn's end out of the Session's transcript,
+    // once, as droid 1.4.1 does: it does not wait for a turn still running.
+    'daemon.get_session_turn_outcome': (params, context) => {
+      const sessionId = String(params['sessionId'])
+      const turnId = String(params['turnId'])
+      const unavailable = (reason: string) => ({ status: 'unavailable', sessionId, turnId, reason })
+      const found = sessions.find((s) => s.sessionId === sessionId)
+      if (!found || found.unwritten) return unavailable('session_not_found')
+      const outcome = context.daemon.turnOutcome(sessionId, turnId)
+      if (!outcome) return unavailable('turn_unverified')
+      return {
+        status: 'available',
+        sessionId,
+        turnId,
+        outcome: { type: 'agent_turn_outcome', turnId, reason: outcome.reason, resultKind: 'text' },
+        finalOutput: outcome.finalOutput,
+      }
+    },
+    'daemon.load_session': async (params, context) => {
       const found = sessions.find((s) => s.sessionId === params['sessionId'])
       if (!found) throw new Error(`Scenario has no session ${String(params['sessionId'])}`)
       if (input.loadDelayMs) await new Promise((resolve) => setTimeout(resolve, input.loadDelayMs))
       delete found.inactive
+      // Like the real Daemon, a load hands the Client the permission requests
+      // no Client answered yet.
+      const pendingPermissions = context.daemon
+        .pendingRequests('daemon.request_permission', found.sessionId)
+        .map(({ id, params: asked }) => ({
+          requestId: id,
+          toolUses: asked['toolUses'],
+          options: asked['options'],
+          ...(asked['associatedSessionIds']
+            ? { associatedSessionIds: asked['associatedSessionIds'] }
+            : {}),
+        }))
       const subagentInvocations = sessions.flatMap((s) =>
         s.subagent?.callingSessionId === found.sessionId
           ? [
@@ -612,6 +642,7 @@ export function createScenario(input: ScenarioInput): Scenario {
             }
           : {}),
         ...(subagentInvocations.length > 0 ? { subagentInvocations } : {}),
+        ...(pendingPermissions.length > 0 ? { pendingPermissions } : {}),
       }
     },
     ...input.handlers,

@@ -101,6 +101,27 @@ const RESULT_SCHEMAS = {
     'daemon.resume_session_crons': z.object({ resumedCount: z.number().int().nonnegative() }),
     // Newer than the SDK's schemas (droid 1.0).
     'daemon.kill_background_process': z.object({ killed: z.boolean() }),
+    // Newer than the SDK's schemas (droid 1.4.1).
+    'daemon.get_session_turn_outcome': z.discriminatedUnion('status', [
+        z.object({
+            status: z.literal('available'),
+            sessionId: z.string(),
+            turnId: z.string(),
+            outcome: z.object({
+                type: z.literal('agent_turn_outcome'),
+                turnId: z.string().min(1),
+                reason: z.string(),
+                resultKind: z.literal('text'),
+            }),
+            finalOutput: z.string(),
+        }),
+        z.object({
+            status: z.literal('unavailable'),
+            sessionId: z.string(),
+            turnId: z.string(),
+            reason: z.enum(['session_not_found', 'turn_unverified', 'deadline_exceeded']),
+        }),
+    ]),
 };
 // The Daemon sends a Session's lifecycle on the same method; the SDK does not
 // export the wider schema that covers it.
