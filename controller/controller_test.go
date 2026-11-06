@@ -946,3 +946,46 @@ func TestClosingASessionNotifiesSessionClosedAndDropsItFromTheStore(t *testing.T
 		return ok && nf.SessionID == draft.SessionID
 	})
 }
+
+// daemon.load_session reports the working state the Daemon holds for a
+// Session, as droid 1.4.1 does: a Session it told nothing of is idle, and one
+// working when another Client loads it stays working, so that Client's
+// sidebar does not show it idle until its next notification.
+func TestALoadReportsTheSessionsWorkingState(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+	})
+	c, _ := start(t, d, controller.Config{})
+	ctx := context.Background()
+	id := d.Sessions[0].SessionID
+	loaded, err := c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.WorkingState != protocol.DroidWorkingStateIdle {
+		t.Fatalf("a Session nobody told of is %q", loaded.WorkingState)
+	}
+	if err := d.Notify(id, map[string]any{"type": "droid_working_state_changed", "newState": "thinking"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.WorkingState != protocol.DroidWorkingStateThinking || loaded.IsAgentLoopInProgress == nil || !*loaded.IsAgentLoopInProgress {
+		t.Fatalf("a working Session loads as %q, loop %v", loaded.WorkingState, loaded.IsAgentLoopInProgress)
+	}
+	if got := c.Store().Session(id).WorkingState(); got != protocol.DroidWorkingStateThinking {
+		t.Fatalf("the Store's state after the load is %q", got)
+	}
+	if err := d.Notify(id, map[string]any{"type": "droid_working_state_changed", "newState": "idle"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.WorkingState != protocol.DroidWorkingStateIdle {
+		t.Fatalf("an idle Session loads as %q", loaded.WorkingState)
+	}
+}

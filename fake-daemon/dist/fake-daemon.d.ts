@@ -51,6 +51,12 @@ export declare class FakeDaemon {
     get connectionCount(): number;
     /** Wait until the Client has sent a request with this method (the nth one, 1-based). */
     waitForRequest(method: string, nth?: number, timeoutMs?: number): Promise<RecordedRequest>;
+    /**
+     * A Session's working state, as the real Daemon keeps it: the last
+     * droid_working_state_changed it sent, idle for a Session it told nothing of
+     * yet.
+     */
+    workingState(sessionId: string): string;
     /** Push a Session notification to every connection. */
     notify(sessionId: string, notification: Record<string, unknown>): void;
     /**

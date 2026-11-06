@@ -93,6 +93,12 @@ export class FakeDaemon {
   #transcripts = new Map<string, TranscriptMessage[]>()
   /** How each Session's turns ended, by turn id, as the Daemon writes it into the transcript. */
   #turnOutcomes = new Map<string, Map<string, TurnOutcome>>()
+  /**
+   * Each Session's working state as the Daemon last told it, which
+   * daemon.load_session reports, as the real Daemon reports the state it holds
+   * for the Session.
+   */
+  #workingStates = new Map<string, string>()
 
   private constructor(server: Server, wss: WebSocketServer, port: number, scenario: Scenario) {
     this.#server = server
@@ -255,8 +261,21 @@ export class FakeDaemon {
     throw new Error(`Fake Daemon never received ${method}`)
   }
 
+  /**
+   * A Session's working state, as the real Daemon keeps it: the last
+   * droid_working_state_changed it sent, idle for a Session it told nothing of
+   * yet.
+   */
+  workingState(sessionId: string): string {
+    return this.#workingStates.get(sessionId) ?? 'idle'
+  }
+
   /** Push a Session notification to every connection. */
   notify(sessionId: string, notification: Record<string, unknown>): void {
+    const state = notification['newState']
+    if (notification['type'] === 'droid_working_state_changed' && typeof state === 'string') {
+      this.#workingStates.set(sessionId, state)
+    }
     this.#broadcast({
       jsonrpc: '2.0',
       factoryApiVersion: '1.0.0',
