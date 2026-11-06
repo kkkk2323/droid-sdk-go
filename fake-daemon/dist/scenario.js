@@ -496,8 +496,13 @@ export function createScenario(input) {
                     },
                 ]
                 : []);
+            // The real Daemon reports the working state it holds for the Session, so
+            // a Client that loads one mid-turn keeps showing it as working.
+            const state = context.daemon.workingState(found.sessionId);
             return {
                 ...loadSessionResult(found, params['messageLimit']),
+                workingState: state,
+                isAgentLoopInProgress: state !== 'idle',
                 availableModels: models,
                 ...(found.subagent
                     ? {

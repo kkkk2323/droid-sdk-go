@@ -142,7 +142,9 @@ export function turnLoadState(sessionId: string): Record<string, unknown> {
   const processes = backgroundProcesses.get(sessionId)
   return {
     ...(processes ? { backgroundProcesses: { capturedAtMs: Date.now(), processes } } : {}),
-    ...(turn ? { isAgentLoopInProgress: true, workingState: 'streaming_assistant_message' } : {}),
+    // The working state is the one the turn's notifications set, which
+    // daemon.load_session reports as the Daemon's own.
+    ...(turn ? { isAgentLoopInProgress: true } : {}),
     ...(held.length > 0
       ? {
           queuedMessages: held.map((m) => ({
