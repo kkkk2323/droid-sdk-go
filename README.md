@@ -63,6 +63,13 @@ handler may call the Controller. Store events come on the goroutine that
 changed the store (for notifications, the connection's read goroutine): a
 store subscriber must not block.
 
+Long Sessions: `Messages` and `DisplayMessages` copy every message on each
+call. A client that reads them after each change uses `ReadMessages` and
+`ReadDisplayMessages`, which hand it the store's own slice under its lock,
+kept up to date as messages are added or replaced. The store keeps every
+message it loaded; `Store.TrimOlderMessages` lets go of all but the latest,
+which `PrependOlderMessages` brings back.
+
 ## What the Go port leaves out of the TS SDK
 
 - Cloud machines, relays, computers, missions, terminals, act-as grants,
