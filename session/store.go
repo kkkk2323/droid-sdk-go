@@ -568,6 +568,25 @@ func (s *Store) PrependOlderMessages(id string, page []protocol.FactoryDroidMess
 	})
 }
 
+// TrimOlderMessages drops all but the keep latest of Session id's stored
+// messages, as if only those had been loaded, so that a long Session read
+// back to its start lets go of what it read. HasOlderMessages then holds,
+// and PrependOlderMessages brings them back. The todo list stays as it was.
+// It reports whether any message was dropped.
+func (s *Store) TrimOlderMessages(id string, keep int) (trimmed bool) {
+	s.update(func() {
+		st := s.sessions[id]
+		if st == nil || keep < 0 || st.thread.len() <= keep {
+			return
+		}
+		st.thread.trimFront(st.thread.len() - keep)
+		st.hasOlder = true
+		st.emitMessages(false)
+		trimmed = true
+	})
+	return trimmed
+}
+
 // LoadToken is taken before a daemon.load_session call; ApplyLoadResult uses
 // it to tell state that changed while the call was out.
 type LoadToken struct {

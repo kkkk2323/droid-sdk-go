@@ -21,31 +21,39 @@ const (
 func FilterMessagesForUI(msgs []protocol.FactoryDroidMessage) []protocol.FactoryDroidMessage {
 	out := make([]protocol.FactoryDroidMessage, 0, len(msgs))
 	for _, m := range msgs {
-		if m.HiddenFromUserViews != nil && *m.HiddenFromUserViews || m.Visibility == protocol.MessageVisibilityLLMOnly {
-			continue
+		if f, ok := filterForUI(m); ok {
+			out = append(out, f)
 		}
-		if m.Role != roleAssistant {
-			content := make([]protocol.ContentBlock, 0, len(m.Content))
-			for _, b := range m.Content {
-				if b.Type == blockText {
-					if t := decode[textView](b).Text; strings.Contains(t, systemReminderStart) || strings.Contains(t, systemNotificationStart) {
-						t = strings.TrimSpace(stripSystemTags(t))
-						if t == "" {
-							continue
-						}
-						b = withFields(b, map[string]any{"text": t})
-					}
-				}
-				content = append(content, b)
-			}
-			m.Content = content
-		}
-		if len(m.Content) == 0 && !isPersistedHook(m) {
-			continue
-		}
-		out = append(out, m)
 	}
 	return out
+}
+
+// filterForUI is what FilterMessagesForUI makes of one message, and whether
+// it keeps it. m is not modified.
+func filterForUI(m protocol.FactoryDroidMessage) (protocol.FactoryDroidMessage, bool) {
+	if m.HiddenFromUserViews != nil && *m.HiddenFromUserViews || m.Visibility == protocol.MessageVisibilityLLMOnly {
+		return m, false
+	}
+	if m.Role != roleAssistant {
+		content := make([]protocol.ContentBlock, 0, len(m.Content))
+		for _, b := range m.Content {
+			if b.Type == blockText {
+				if t := decode[textView](b).Text; strings.Contains(t, systemReminderStart) || strings.Contains(t, systemNotificationStart) {
+					t = strings.TrimSpace(stripSystemTags(t))
+					if t == "" {
+						continue
+					}
+					b = withFields(b, map[string]any{"text": t})
+				}
+			}
+			content = append(content, b)
+		}
+		m.Content = content
+	}
+	if len(m.Content) == 0 && !isPersistedHook(m) {
+		return m, false
+	}
+	return m, true
 }
 
 func stripSystemTags(text string) string {

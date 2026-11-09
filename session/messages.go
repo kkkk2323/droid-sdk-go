@@ -150,11 +150,23 @@ type thread struct {
 	byID     map[string]message
 	order    []string
 	lastConv string
+	// view is the stored messages in order and shown what a transcript shows
+	// of them (FilterMessagesForUI); nil when they have to be read again.
+	// A message added at the end or replaced keeps both up to date, so a
+	// long transcript is not copied again on each change: reading it after
+	// each one was most of what a client following a long Session spent.
+	view, shown []message
+	// moved: placing a message sorted the thread again.
+	moved bool
 }
 
 func newThread() thread { return thread{byID: map[string]message{}} }
 
+// stale drops view and shown, to be read again.
+func (t *thread) stale() { t.view, t.shown = nil, nil }
+
 func (t *thread) reset(msgs []message) {
+	t.stale()
 	t.byID = make(map[string]message, len(msgs))
 	t.order = make([]string, 0, len(msgs))
 	for _, m := range msgs {
@@ -174,22 +186,91 @@ func (t *thread) get(id string) (message, bool) {
 }
 
 // all returns the stored messages, sharing their content; callers must
-// not modify it.
+// not modify it or keep it past the lock.
 func (t *thread) all() []message {
-	out := make([]message, 0, len(t.order))
-	for _, id := range t.order {
-		out = append(out, t.byID[id])
+	if t.view == nil {
+		t.view = make([]message, 0, len(t.order))
+		for _, id := range t.order {
+			t.view = append(t.view, t.byID[id])
+		}
 	}
-	return out
+	return t.view[:len(t.view):len(t.view)]
+}
+
+// display returns what a transcript shows of the stored messages, as
+// FilterMessagesForUI does, on the same terms as all.
+func (t *thread) display() []message {
+	if t.shown == nil {
+		all := t.all()
+		t.shown = make([]message, 0, len(all))
+		for _, m := range all {
+			if f, ok := filterForUI(m); ok {
+				t.shown = append(t.shown, f)
+			}
+		}
+	}
+	return t.shown[:len(t.shown):len(t.shown)]
 }
 
 // list returns a copy safe to hand out.
 func (t *thread) list() []message {
-	out := t.all()
-	for i := range out {
-		out[i].Content = slices.Clone(out[i].Content)
+	return cloneMessages(t.all())
+}
+
+// appended keeps view and shown, read before a change, up to date with m
+// added at the end.
+func (t *thread) appended(view, shown []message, m message) {
+	if view == nil || t.moved || len(t.order) != len(view)+1 || t.order[len(view)] != m.ID {
+		t.stale()
+		return
 	}
-	return out
+	t.view = append(view, m)
+	if shown == nil {
+		t.shown = nil
+		return
+	}
+	if f, ok := filterForUI(m); ok {
+		shown = append(shown, f)
+	}
+	t.shown = shown
+}
+
+// replaced keeps view and shown up to date with m in place of the message
+// of its id, which stays where it was.
+func (t *thread) replaced(m message) {
+	if t.view == nil {
+		t.shown = nil
+		return
+	}
+	i := lastIndexOf(t.view, m.ID)
+	if i < 0 {
+		t.stale()
+		return
+	}
+	t.view[i] = m
+	if t.shown == nil {
+		return
+	}
+	j := lastIndexOf(t.shown, m.ID)
+	f, ok := filterForUI(m)
+	switch {
+	case j >= 0 && ok:
+		t.shown[j] = f
+	case j >= 0 || ok:
+		// It is shown now and was not, or the other way round.
+		t.shown = nil
+	}
+}
+
+// lastIndexOf is the index of the message with id, searched from the end,
+// where the messages that change are.
+func lastIndexOf(msgs []message, id string) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func (t *thread) lastConversation() (message, bool) {
@@ -215,6 +296,12 @@ func (t *thread) add(m message) {
 		t.set(m)
 		return
 	}
+	// Placing m may read the thread (insertBySeq sorts it), so view and
+	// shown are dropped while it is placed, then brought up to date.
+	view, shown := t.view, t.shown
+	t.stale()
+	t.moved = false
+	defer func() { t.appended(view, shown, m) }()
 	t.byID[m.ID] = m
 	side := isSideband(m)
 	if m.Seq != nil {
@@ -269,7 +356,10 @@ func (t *thread) insertBySeq(m message) {
 				return p.Seq != nil && *p.Seq > *m.Seq
 			}) {
 				t.order = append(t.order, m.ID)
+				t.stale()
 				t.order = messageIDs(sortBySeq(t.all()))
+				t.stale()
+				t.moved = true
 				return
 			}
 			break
@@ -360,21 +450,40 @@ func (t *thread) set(m message) bool {
 	if old.Seq == nil && m.Seq != nil {
 		// An unconfirmed row got its seq: it moves into place, so that a
 		// confirmation landing after later rows does not strand it.
+		t.stale()
 		t.order = slices.DeleteFunc(t.order, func(o string) bool { return o == m.ID })
 		t.insertBySeq(m)
 		t.recomputeLastConv()
 		return true
 	}
+	t.replaced(m)
 	if isSideband(old) != isSideband(m) {
 		t.recomputeLastConv()
 	}
 	return true
 }
 
+// trimFront drops the first n messages.
+func (t *thread) trimFront(n int) {
+	t.stale()
+	for _, id := range t.order[:n] {
+		delete(t.byID, id)
+		if id == t.lastConv {
+			t.lastConv = ""
+		}
+	}
+	// A copy, so that the dropped ids go with the old array.
+	t.order = slices.Clone(t.order[n:])
+	if t.lastConv == "" {
+		t.recomputeLastConv()
+	}
+}
+
 func (t *thread) remove(id string) bool {
 	if _, ok := t.byID[id]; !ok {
 		return false
 	}
+	t.stale()
 	delete(t.byID, id)
 	t.order = slices.DeleteFunc(t.order, func(o string) bool { return o == id })
 	if id == t.lastConv {

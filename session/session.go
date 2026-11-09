@@ -89,8 +89,24 @@ func (h *Session) MessageCount() (n int) {
 // DisplayMessages returns what a transcript shows: the stored messages
 // through FilterMessagesForUI with the optimistic ones merged in.
 func (h *Session) DisplayMessages() (msgs []protocol.FactoryDroidMessage) {
-	h.read(func(st *state) { msgs = st.mergeOptimistic(FilterMessagesForUI(st.thread.list())) })
+	h.read(func(st *state) { msgs = st.mergeOptimistic(cloneMessages(st.thread.display())) })
 	return msgs
+}
+
+// ReadMessages calls fn with what Messages returns, without copying it,
+// which matters for a long Session read after each change. fn runs under
+// the Store's lock: it must not call into the Store, and must neither change
+// the messages nor keep the slice or their Content once it returns. A
+// block's Raw is never changed in place, and may be kept.
+func (h *Session) ReadMessages(fn func(msgs []protocol.FactoryDroidMessage)) {
+	h.read(func(st *state) { fn(st.thread.all()) })
+}
+
+// ReadDisplayMessages calls fn with what DisplayMessages returns, on the
+// terms of ReadMessages. The filtering is done once per message, as it is
+// stored or changed, not on each call.
+func (h *Session) ReadDisplayMessages(fn func(msgs []protocol.FactoryDroidMessage)) {
+	h.read(func(st *state) { fn(st.mergeOptimistic(st.thread.display())) })
 }
 
 // IsConversationEmpty reports whether there is no message, stored or
