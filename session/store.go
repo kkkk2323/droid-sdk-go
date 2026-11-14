@@ -134,7 +134,6 @@ type SpawnOptions struct {
 	SkipPermissionsUnsafe    *bool
 	RuntimeSettingsPath      string
 	StructuredOutputFormat   *protocol.OutputFormat
-	TaskSubagentProcess      *bool
 }
 
 // NewStore returns an empty Store.

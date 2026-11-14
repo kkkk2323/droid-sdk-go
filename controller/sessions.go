@@ -157,7 +157,6 @@ func stash(p protocol.LoadSessionParams) protocol.LoadSessionParams {
 		SkipPermissionsUnsafe:    p.SkipPermissionsUnsafe,
 		RuntimeSettingsPath:      p.RuntimeSettingsPath,
 		StructuredOutputFormat:   p.StructuredOutputFormat,
-		TaskSubagentProcess:      p.TaskSubagentProcess,
 	}
 }
 
@@ -179,9 +178,6 @@ func withStashed(p, s protocol.LoadSessionParams) protocol.LoadSessionParams {
 	}
 	if p.StructuredOutputFormat == nil {
 		p.StructuredOutputFormat = s.StructuredOutputFormat
-	}
-	if p.TaskSubagentProcess == nil {
-		p.TaskSubagentProcess = s.TaskSubagentProcess
 	}
 	return p
 }
@@ -523,10 +519,8 @@ func (c *Controller) applyNotification(sessionID string, v any, p protocol.Sessi
 		out = c.prompts.failHandoff(sessionID, errNoHandoffSession, out)
 	case *protocol.SpecHandoffSessionCreatedNotification:
 		c.onSpecHandoffCreated(sessionID, *v)
-	case nil:
-		if p.Notification.Type == notificationAskUserResolved {
-			out = c.onAskUserResolved(sessionID, p.Notification.Raw, out)
-		}
+	case *protocol.AskUserResolvedNotification:
+		out = c.onAskUserResolved(sessionID, v.RequestIDs, out)
 	case *protocol.DroidWorkingStateChangedNotification:
 		if v.NewState != protocol.DroidWorkingStateWaitingForToolConfirmation {
 			out = c.prompts.clearStale(sessionID, out)

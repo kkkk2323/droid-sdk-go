@@ -188,9 +188,39 @@ const decls = [] // Go source chunks, in order
 const emitted = new Set()
 const queue = []
 
+// Schemas whose JSON a type made from another schema already reads. Load's
+// snapshot (0.11) marks the in-flight reply's open blocks as streaming
+// (RuntimeContentBlock); ContentBlock keeps that in Raw, so its Session and
+// messages stay Session and FactoryDroidMessage.
+const SAME_AS_BASES = ['FactoryDroidMessageSchema', 'SessionSchema']
+function sameAs(s) {
+  if (all.RuntimeContentBlockSchema && s === all.RuntimeContentBlockSchema) return all.ContentBlockSchema
+  if (tn(s) !== 'ZodObject') return null
+  for (const k of SAME_AS_BASES) {
+    const base = all[k]
+    if (!base || s === base || tn(base) !== 'ZodObject') continue
+    const sh = shapeOf(s),
+      bs = shapeOf(base)
+    const keys = Object.keys(sh)
+    if (keys.length !== Object.keys(bs).length || keys.some((key) => !(key in bs))) continue
+    if (keys.every((key) => sameJSON(sh[key], bs[key]))) return base
+  }
+  return null
+}
+function sameJSON(a, b) {
+  if (a === b) return true
+  const ua = unwrap(a),
+    ub = unwrap(b)
+  if (ua.optional !== ub.optional || ua.nullable !== ub.nullable) return false
+  if (ua.s === ub.s || sameAs(ua.s) === ub.s) return true
+  return tn(ua.s) === 'ZodArray' && tn(ub.s) === 'ZodArray' && sameJSON(ua.s._def.type, ub.s._def.type)
+}
+
 function typeRef(schema, hint) {
   // Returns the Go type for a schema, emitting named types as needed.
   const { s } = unwrap(schema)
+  const alias = sameAs(s)
+  if (alias) return typeRef(alias, hint)
   const t = tn(s)
   switch (t) {
     case 'ZodString':
@@ -320,97 +350,13 @@ function comment(text, indent = '') {
 // come from does not have yet. Kept here so that regenerating keeps them; a
 // release that adds one makes its entry here a duplicate, which gen fails on.
 const NEWER_FIELDS = {
-  AskUserParams: [
-    ['blocking', '*bool', 'False for a queued question set (droid 1.1): the agent keeps working and the answers reach it later. Absent means blocking.'],
-    ['context', 'string', "A queued question set's self-contained explanation (droid 1.1), shown above its questions."],
-  ],
-  LoadSessionResultPendingAskUserRequestsItem: [
-    ['blocking', '*bool', 'False for a queued question set (droid 1.1). Absent means blocking.'],
-    ['context', 'string', "A queued question set's explanation (droid 1.1)."],
-  ],
-  ModelMetadata: [
-    ['behavesLikeModelId', 'string', "For a custom model, the built-in model whose behavior it inherits (droid 1.1): its baseModelId, else the closest built-in to its upstream model id. Absent when nothing matches, and from older Daemons."],
-  ],
-  DroidWorkingStateChangedNotification: [
-    ['backgroundWork', '*int64', 'Sent when the Session goes idle (droid 1.0): the background work it still waits on (background commands, Script runs, subagent results still owed), any of which wakes it later. Absent from older Daemons.'],
-  ],
-  LoadSessionResult: [
-    ['backgroundWork', '*int64', 'The background work the Session waits on at load time, as droid_working_state_changed reports it (droid 1.0).'],
-    ['backgroundProcesses', '*SessionBackgroundProcessesSnapshot', 'The background processes the Session tracks at load time (droid 1.0). Absent from older Daemons, which also do not handle daemon.kill_background_process.'],
-  ],
-  AskUserQuestion: [
-    ['optionDescriptions', '[]string', "What choosing each option means, index-aligned with Options (droid 1.2: an Anthropic model asking in Claude Code's AskUserQuestion shape writes one per option). Absent when the agent gave none."],
-  ],
-  InitializeSessionResult: [
-    ['hasOlderMessages', '*bool', 'Whether session.messages is a trailing window of a longer history (droid 1.2, a Session seeded from another one); the rest comes from daemon.get_session_messages.'],
-  ],
-  AutomationRunRecord: [
-    ['failureReason', 'string', 'Machine-readable classification of a recorded failure (droid 1.2). A plain string: a reason newer than the Client is kept as reported.'],
-    ['outcomeOverride', '*AutomationRunOutcomeOverride', "Present when a user changed the run's outcome (droid 1.2): Status already shows the changed outcome, this names the recorded one and who changed it."],
-  ],
 }
 
 // Types and methods of droid's Daemon that the release lacks, named as the
 // generator would name them from droid's own schemas. A release that has
 // one makes it a duplicate, which gen fails on.
-const NEWER_TYPES = {
-  SessionBackgroundProcess: `// SessionBackgroundProcess is a background process a Session started (a
-// fire-and-forget Execute) that still runs on the computer hosting the
-// Session (droid 1.0). Pid and OutputFile are of that computer, which may not
-// be the Client's.
-type SessionBackgroundProcess struct {
-	// Stable identifier: the starting tool call's id when known.
-	ID          string  \`json:"id"\`
-	Pid         float64 \`json:"pid"\`
-	Command     string  \`json:"command"\`
-	StartedAtMs float64 \`json:"startedAtMs"\`
-	ToolUseID   string  \`json:"toolUseId,omitempty"\`
-	OutputFile  string  \`json:"outputFile,omitempty"\`
-}
-`,
-  SessionBackgroundProcessesSnapshot: `// SessionBackgroundProcessesSnapshot is every background process a Session
-// tracks, as of CapturedAtMs on the Session host's clock (droid 1.0).
-type SessionBackgroundProcessesSnapshot struct {
-	CapturedAtMs float64                    \`json:"capturedAtMs"\`
-	Processes    []SessionBackgroundProcess \`json:"processes"\`
-}
-`,
-  BackgroundProcessesChangedNotification: `// BackgroundProcessesChangedNotification (session notification
-// background_processes_changed, droid 1.0) is a Session's background
-// processes after one started or ended.
-type BackgroundProcessesChangedNotification struct {
-	Type         string                     \`json:"type"\`
-	CapturedAtMs float64                    \`json:"capturedAtMs"\`
-	Processes    []SessionBackgroundProcess \`json:"processes"\`
-}
-`,
-  AutomationRunOutcomeOverride: `// AutomationRunOutcomeOverride is a user's change of an automation run's
-// outcome (droid 1.2).
-type AutomationRunOutcomeOverride struct {
-	// The outcome the run was recorded with before the change: success or
-	// failure, or another a newer writer records.
-	OriginalStatus string \`json:"originalStatus"\`
-	// Opaque label of who changed it: a user id, email, or display name.
-	ChangedBy string \`json:"changedBy"\`
-	// The user's reason for the change.
-	Note string \`json:"note,omitempty"\`
-}
-`,
-  KillBackgroundProcessParams: `type KillBackgroundProcessParams struct {
-	SessionID string \`json:"sessionId"\`
-	ProcessID string \`json:"processId"\`
-}
-`,
-  KillBackgroundProcessResult: `type KillBackgroundProcessResult struct {
-	// False when the Session tracks no running process with that id, or the
-	// process could not be signalled.
-	Killed bool \`json:"killed"\`
-}
-`,
-}
-const NEWER_METHODS = [
-  { rpc: 'daemon.kill_background_process', paramsType: 'KillBackgroundProcessParams', resultType: 'KillBackgroundProcessResult' },
-]
+const NEWER_TYPES = {}
+const NEWER_METHODS = []
 
 function emitStruct(s, shape = shapeOf(s)) {
   const name = nameOf.get(s)
@@ -677,15 +623,36 @@ fs.writeFileSync(
     decls.join('\n'),
 )
 
-const timeouts = {
-  '3e5': '300 * time.Second',
-  '18e4': '180 * time.Second',
-  COMPACTION_REQUEST_TIMEOUT: '240 * time.Second',
-  FILE_TRANSFER_REQUEST_TIMEOUT: '900 * time.Second',
+// A timeout override as the bundle writes it: a literal (3e5), a constant
+// (COMPACTION_REQUEST_TIMEOUT) or sums and products of those, the constants
+// read from the bundle's chunks. One that reads the call's params or options
+// is the caller's to set: 0, the Client's default.
+const bundleText = fs
+  .readdirSync(path.dirname(chunkPath))
+  .filter((f) => f.endsWith('.mjs'))
+  .map((f) => fs.readFileSync(path.join(path.dirname(chunkPath), f), 'utf8'))
+  .join('\n')
+function constantMs(expr, depth = 0) {
+  if (depth > 5) return null
+  let ok = true
+  const s = expr.trim().replace(/[A-Za-z_]\w*/g, (id) => {
+    if (/^\d/.test(id) || /^e\d*$/.test(id)) return id
+    const def = new RegExp(`^var ${id} = (.+);$`, 'm').exec(bundleText)
+    const v = def && constantMs(def[1], depth + 1)
+    if (v == null) ok = false
+    return String(v)
+  })
+  if (!ok || !/^[\d.e+*\s()]+$/.test(s)) return null
+  return Function(`return (${s})`)()
+}
+function timeoutOf(expr) {
+  const ms = expr && constantMs(expr)
+  if (!ms) return '0'
+  return ms % 1000 === 0 ? `${ms / 1000} * time.Second` : `${ms} * time.Millisecond`
 }
 const mlines = methodEntries.map((m) => {
   const done = m.done.length ? JSON.stringify(m.done[0]) : '""'
-  const to = timeouts[m.timeout] ?? '0'
+  const to = timeoutOf(m.timeout)
   return `\t${JSON.stringify(m.rpc)}: {Ack: ${m.ack}, CompletedBy: ${done}, Timeout: ${to}},`
 })
 const consts = methodEntries.map((m) => `\tMethod${m.base} = ${JSON.stringify(m.rpc)}`)
@@ -763,10 +730,19 @@ ${mlines.join('\n')}
 `,
 )
 
+// A protocol type as the root package names it: `[]json.RawMessage` stays,
+// `[]Foo` is `[]protocol.Foo`.
+const GO_BUILTINS = new Set(['string', 'bool', 'float64', 'int64', 'any', 'struct{}'])
+function qualified(t) {
+  for (const prefix of ['[]', '*', 'map[string]'])
+    if (t.startsWith(prefix)) return prefix + qualified(t.slice(prefix.length))
+  return t.startsWith('json.') || GO_BUILTINS.has(t) ? t : 'protocol.' + t
+}
+
 // Typed wrappers on the root package's Client.
 const wrappers = methodEntries.map((m) => {
   const doc = `// ${m.goName} calls ${m.rpc}.\n`
-  const res = m.resultType.startsWith('json.') ? 'json.RawMessage' : 'protocol.' + m.resultType
+  const res = m.resultType.startsWith('json.') ? 'json.RawMessage' : qualified(m.resultType)
   if (!m.paramsType) {
     return `${doc}func (c *Client) ${m.goName}(ctx context.Context) (*${res.replace(/^json\./, 'json.')}, error) {\n\tvar out ${res}\n\treturn &out, c.Call(ctx, protocol.Method${m.base}, nil, &out)\n}\n`
   }
@@ -775,7 +751,7 @@ const wrappers = methodEntries.map((m) => {
       ? null
       : m.paramsType.startsWith('json.')
         ? 'json.RawMessage'
-        : 'protocol.' + m.paramsType
+        : qualified(m.paramsType)
   if (!p)
     return `${doc}func (c *Client) ${m.goName}(ctx context.Context) (*${res}, error) {\n\tvar out ${res}\n\treturn &out, c.Call(ctx, protocol.Method${m.base}, struct{}{}, &out)\n}\n`
   return `${doc}func (c *Client) ${m.goName}(ctx context.Context, params ${p}) (*${res}, error) {\n\tvar out ${res}\n\treturn &out, c.Call(ctx, protocol.Method${m.base}, params, &out)\n}\n`
