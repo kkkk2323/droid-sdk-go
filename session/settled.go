@@ -7,8 +7,8 @@ import (
 	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
-// notificationChildSessionSettled is newer than the generated notification
-// union (droid 1.1), which decodes it to nil. The Daemon sends it on a
+// notificationChildSessionSettled (droid 1.1) is read from its raw JSON, as
+// @factory/droid-sdk before 0.11 lacked it. The Daemon sends it on a
 // parent Session when one of its Task children reaches a terminal outcome,
 // so that a Client that cannot reach the child's computer can settle it.
 const notificationChildSessionSettled = "child_session_settled"

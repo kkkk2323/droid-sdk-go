@@ -13,7 +13,8 @@ func TestMethodTimeoutOverrides(t *testing.T) {
 	want := map[string]time.Duration{
 		MethodAuthenticateMCPServer: 300 * time.Second,
 		MethodCompactSession:        240 * time.Second,
-		MethodCleanupWorktree:       180 * time.Second,
+		MethodCleanupWorktree:       900 * time.Second,
+		MethodImportSession:         480 * time.Second,
 		MethodGenerateSemanticDiff:  180 * time.Second,
 		MethodPushCwdFileToURL:      900 * time.Second,
 		MethodPullURLToCwdFile:      900 * time.Second,

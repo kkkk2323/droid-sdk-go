@@ -24,9 +24,10 @@ for (const m of methods) {
   if (rpc.length === 0) continue
   const req = /(\w+RequestSchema\w*)\.parse/.exec(b)?.[1]
   // 0.10 sends some requests with this.engine.request(validated, X, {...}) and
-  // passes the parse inline (sendRequest(XRequestSchema.parse(request), X)).
+  // passes the parse inline (sendRequest(XRequestSchema.parse(request), X));
+  // 0.11 also sends the parsed request (sendRequest(request, X)).
   const res =
-    /(?:sendRequest|engine\.request)\(\s*(?:validated|\w+RequestSchema\w*\.parse\(request\)),\s*(\w+)/.exec(b)?.[1] ??
+    /(?:sendRequest|engine\.request)\(\s*(?:validated|request|\w+RequestSchema\w*\.parse\(request\)),\s*(\w+)/.exec(b)?.[1] ??
     /responseSchema: (\w+)/.exec(b)?.[1] ??
     (req && /^Daemon\w+RequestSchema$/.test(req) ? req.replace(/RequestSchema$/, 'ResultSchema') : undefined)
   const ack = /sendAckCompatibleRequest/.test(b)

@@ -4,9 +4,9 @@ A Go client for the Droid Daemon (`droid daemon`), the JSON-RPC-over-WebSocket
 protocol that Factory's TypeScript SDK (`@factory/droid-sdk`) speaks. Pure Go,
 no Node at run time.
 
-Checked against `droid daemon` 0.233.0 (protocol 1.245.0); types generated from
-`@factory/droid-sdk` 0.10.0 (protocol 1.269.0), plus what droid 1.0, 1.1 and 1.2
-add that it lacks (see "Upgrading" below).
+Checked against `droid daemon` 0.233.0 (protocol 1.245.0) and used with droid 1.12;
+types generated from `@factory/droid-sdk` 0.11.0 (protocol 1.332.0), which has
+everything this package once added by hand for droid 1.0 to 1.2 (see "Upgrading" below).
 
 ```sh
 go get github.com/kkkk2323/droid-sdk-go@latest
@@ -19,8 +19,8 @@ the Fake Daemon below.
 
 | Package        | What it is                                                                                                                                                                                                                                                                           | Written by         |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
-| `protocol`     | Every type of the protocol (832), method and notification names, per-method ack/timeout table                                                                                                                                                                                        | generated (`gen/`) |
-| `droid` (root) | `Client`: one authenticated connection; a typed method for each of the 148 RPCs (`zz_client_methods.go`, generated), `Call`, `Subscribe`, `Handle`/`HandleLater`/`Respond` for the Daemon's own requests, frame recording                                                            | hand               |
+| `protocol`     | Every type of the protocol (928), method and notification names, per-method ack/timeout table                                                                                                                                                                                        | generated (`gen/`) |
+| `droid` (root) | `Client`: one authenticated connection; a typed method for each of the 160 RPCs (`zz_client_methods.go`, generated), `Call`, `Subscribe`, `Handle`/`HandleLater`/`Respond` for the Daemon's own requests, frame recording                                                            | hand               |
 | `controller`   | Connects and authenticates, reconnects and reloads Sessions, loads a Session before a call that needs its worker, tracks permission and AskUser prompts (keeping an answer given while a worker is gone until it is back), feeds the store. Port of the TS `DaemonSessionController` | hand               |
 | `session`      | The Sessions' state: transcript built from streamed deltas, working state, settings, token usage, todos, queued and optimistic messages, subagents, display filtering. Port of the TS `MultiSessionStateManager`/`SessionStateManager`/`SessionStore`. No I/O                        | hand               |
 | `fakedaemon`   | Runs the Fake Daemon (Node) for Go tests                                                                                                                                                                                                                                             | hand               |
@@ -216,7 +216,7 @@ without a network.
 ## Upgrading to a new `@factory/droid-sdk`
 
 ```sh
-gen/generate.sh 0.10.0 && go build ./... && go test -race ./...
+gen/generate.sh 0.11.0 && go build ./... && go test -race ./...
 ```
 
 `generate.sh` installs that release from npm, pulls the zod schemas and the
@@ -225,27 +225,31 @@ DaemonClient method table out of its bundle, and rewrites `protocol/` and
 `droid` has that the release lacks is listed in `gen/gen.mjs`: fields on
 generated structs in `NEWER_FIELDS`, whole types in `NEWER_TYPES` and
 methods in `NEWER_METHODS`; generation fails once a release has one of
-them itself. Against 0.10.0 they are:
+them itself. Against 0.11.0 all three are empty: 0.11.0 has every field,
+type and method they held for droid 1.0 to 1.2.
 
-- `NEWER_FIELDS`: `optionDescriptions` on `AskUserQuestion`,
-  `hasOlderMessages` on the initialize result, `failureReason` and
-  `outcomeOverride` on `AutomationRunRecord` (droid 1.2); `blocking` and
-  `context` on AskUser and on load's pending AskUser requests (droid 1.1); `behavesLikeModelId` on
-  `ModelMetadata` (droid 1.1); `backgroundWork` on
-  `droid_working_state_changed` and on the load result, and the load
-  result's `backgroundProcesses` (droid 1.0).
-- `NEWER_TYPES`: `AutomationRunOutcomeOverride` (droid 1.2),
-  `SessionBackgroundProcess`,
-  `SessionBackgroundProcessesSnapshot`,
-  `BackgroundProcessesChangedNotification`, and the params and result of
-  `daemon.kill_background_process` (droid 1.0).
-- `NEWER_METHODS`: `daemon.kill_background_process` (droid 1.0).
+`ask_user_resolved`, `child_session_settled` and
+`background_processes_changed` are in the generated notification union since
+0.11.0. The Controller handles `ask_user_resolved` by its type
+(`controller/queued.go`); the store still reads the other two from their raw
+JSON (`session/settled.go`, `session/background.go`). The compiler points at
+the hand-written code that uses what changed.
 
-Session notifications newer than the release are not in the generated
-union (`Value()` is nil); the code that handles them reads their raw JSON:
-`ask_user_resolved` (`controller/queued.go`), `child_session_settled`
-(`session/settled.go`) and `background_processes_changed`. The compiler
-points at the hand-written code that uses what changed.
+Measured on 0.10.0 → 0.11.0: 928 types (from 832), 148 → 160 methods (the
+14 `daemon.sf.*` gone with droid 1.4.1's Software Factory, 26 added, among
+them `get_message_blocks`, `answer_elicitation`, `resolve_file_links`,
+`send_session`/`import_session` and the shared folder's), 3 notifications
+more, and `LoadSessionParams.TaskSubagentProcess` (with
+`session.SpawnOptions.TaskSubagentProcess`) gone, as droid no longer has it.
+`gen/` needed five fixes: 0.11 splits the SDK into chunks that import each
+other (`expose.cjs` exposes the schemas of every chunk the main one imports),
+`sendRequest(request, X)` calls (`methods.cjs`), result types that are not a
+named struct (`[]json.RawMessage`), load's snapshot typed as
+`RuntimeContentBlock` (a `ContentBlock` that may carry `isStreaming`; it
+stays `Session` and `FactoryDroidMessage`, `sameAs` in `gen.mjs`), and
+timeout overrides read from the bundle's constants, so `cleanup_worktree` waits
+900 s as the TS client does (it was 180 s). The Fake Daemon still checks its
+messages with 0.9.1's schemas.
 
 Measured on 0.9.1 → 0.10.0: 171 types added (and droid 1.0's 5 in
 `NEWER_TYPES`), 5 renamed or dropped (`EditableSkillSettingsLevel` is

@@ -8,10 +8,9 @@ import (
 	"github.com/kkkk2323/droid-sdk-go/protocol"
 )
 
-// notificationBackgroundProcessesChanged is newer than the generated
-// notification union (droid 1.0), which decodes it to nil. The Daemon sends
-// it with every background process the Session tracks when one starts or
-// ends.
+// notificationBackgroundProcessesChanged (droid 1.0) is read from its raw
+// JSON, as @factory/droid-sdk before 0.11 lacked it. The Daemon sends it with
+// every background process the Session tracks when one starts or ends.
 const notificationBackgroundProcessesChanged = "background_processes_changed"
 
 func (s *Store) handleBackgroundProcessesChanged(sessionID string, raw json.RawMessage) error {
