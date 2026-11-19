@@ -43,6 +43,29 @@ func (st *state) setBackground(snap *protocol.SessionBackgroundProcessesSnapshot
 	st.emit(EventMetadataUpdated)
 }
 
+// setBackgroundWork keeps the Daemon's count of the Session's background
+// work.
+func (st *state) setBackgroundWork(n int) {
+	if st.backgroundWorkKnown && st.backgroundWork == n {
+		return
+	}
+	st.backgroundWork, st.backgroundWorkKnown = n, true
+	st.emit(EventMetadataUpdated)
+}
+
+// BackgroundWork is how much work the Session's agent left running that
+// will wake it, as the Daemon last counted it: background processes,
+// Scripts left running, and the ends of such work it still owes the
+// agent. droid tells
+// it with droid_working_state_changed as the Session goes idle, and in
+// daemon.load_session's result; known is false until it told (an older
+// droid never does). The count stands while a turn runs, and drops to 0
+// when the Session's worker exits, which ends that work.
+func (h *Session) BackgroundWork() (n int, known bool) {
+	h.read(func(st *state) { n, known = st.backgroundWork, st.backgroundWorkKnown })
+	return n, known
+}
+
 // BackgroundProcesses are the processes the Session's agent started in the
 // background (a fire-and-forget Execute) that still run, as the Daemon
 // last reported them (droid 1.0); nil when it reported none, or is older.

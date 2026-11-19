@@ -112,6 +112,10 @@ type state struct {
 	// processes; backgroundRevision counts updates, for a load in flight.
 	background         *protocol.SessionBackgroundProcessesSnapshot
 	backgroundRevision int
+	// backgroundWork is the Daemon's last count of the Session's background
+	// work, once it told one (backgroundWorkKnown).
+	backgroundWork      int
+	backgroundWorkKnown bool
 
 	stats statsFold
 
@@ -513,6 +517,9 @@ func (st *state) handle(typ string, v any, opts HandleOptions) {
 		st.workingRevision++
 		st.statsWorking(n.NewState)
 		st.transition(n.NewState)
+		if n.BackgroundWork != nil {
+			st.setBackgroundWork(int(*n.BackgroundWork))
+		}
 	case *protocol.PermissionResolvedNotification:
 		if st.working == protocol.DroidWorkingStateWaitingForToolConfirmation {
 			st.transition(protocol.DroidWorkingStateStreamingAssistantMessage)
@@ -558,8 +565,11 @@ func (st *state) handle(typ string, v any, opts HandleOptions) {
 	case *protocol.BackgroundProcessesChangedNotification:
 		st.setBackground(&protocol.SessionBackgroundProcessesSnapshot{CapturedAtMs: n.CapturedAtMs, Processes: n.Processes})
 	case *protocol.SessionInactivityNotification, *protocol.SessionProcessExitedNotification:
-		// The worker kills its background processes as it exits.
+		// The worker kills its background processes and Scripts as it exits.
 		st.setBackground(nil)
+		if st.backgroundWorkKnown {
+			st.setBackgroundWork(0)
+		}
 		st.s.inactive[st.id] = true
 		st.setLoadState(NotLoaded, opts.PreserveWorkingStateOnInactive)
 	case *protocol.SessionUnsubscribedNotification:

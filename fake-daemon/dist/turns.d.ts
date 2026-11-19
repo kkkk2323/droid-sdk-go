@@ -36,8 +36,9 @@ export declare function withQueue(handler: MethodHandler): MethodHandler;
  * What daemon.load_session reports of a Session's scripted turn, as the real
  * Daemon does: whether the agent loop runs, the messages it holds for after
  * the turn (queuedMessages), and the requests it admitted
- * (pendingMessageRequestIds: the running turn's and the held ones), and the
- * background processes its turns left running (droid 1.0).
+ * (pendingMessageRequestIds: the running turn's and the held ones), the
+ * background processes its turns left running (droid 1.0), and how much
+ * background work it has (backgroundWork).
  */
 export declare function turnLoadState(sessionId: string): Record<string, unknown>;
 /** Wraps a `daemon.load_session` handler so that its result reports {@link turnLoadState}. */
@@ -110,6 +111,32 @@ export interface BackgroundProcessTurnOptions {
  * process runs on. {@link killBackgroundProcessHandler} stops it.
  */
 export declare function backgroundProcessTurn(options: BackgroundProcessTurnOptions): MethodHandler;
+export interface BackgroundScriptTurnOptions {
+    /** The command the Script runs once its turn ended. */
+    command: string;
+    /** Reply streamed once the Script started, which ends the turn. */
+    reply: string;
+    /** The command's output. */
+    toolOutput?: string;
+    /** What the Script tells the agent with notify(). */
+    notification: string;
+    /** Reply of the turn the notification starts. */
+    notificationReply: string;
+    /** How long the Script waits after its turn ended before it runs the command. */
+    delayMs?: number;
+}
+/**
+ * Handler for `daemon.add_user_message` where the agent starts a Script in
+ * the background (`// @script: {"startInBackground": true}`), as droid 1.x
+ * does: the Script call answers at once that it runs, and the turn ends
+ * with `reply`, idle with background work. After `delayMs` the Script runs
+ * `command` (its calls are user-only messages tied to the run by
+ * scriptExecution), then calls notify(): the Daemon gives the agent
+ * `notification` as a model-only message (`script:notify:...`) that starts a
+ * turn replying `notificationReply`. The Script then ends, and its end comes
+ * as a model-only `script-completion:...` message that starts a last turn.
+ */
+export declare function backgroundScriptTurn(options: BackgroundScriptTurnOptions): MethodHandler;
 /**
  * Handler for `daemon.kill_background_process` (droid 1.0): stops a process a
  * background turn started, reports the list without it, and, as droid does,

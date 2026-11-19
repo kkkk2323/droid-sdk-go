@@ -716,6 +716,10 @@ func (s *Store) ApplyLoadResult(tok LoadToken, res *protocol.LoadSessionResult, 
 		if res.BackgroundProcesses != nil && st.backgroundRevision == tok.backgroundRevision {
 			st.setBackground(res.BackgroundProcesses)
 		}
+		// So is a droid_working_state_changed than the result's count.
+		if res.BackgroundWork != nil && st.workingRevision == tok.WorkingStateRevision {
+			st.setBackgroundWork(int(*res.BackgroundWork))
+		}
 		if len(res.AvailableModels) > 0 {
 			st.setModels(res.AvailableModels)
 		}

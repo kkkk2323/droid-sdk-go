@@ -39867,6 +39867,7 @@ function turnLoadState(sessionId) {
   const processes = backgroundProcesses.get(sessionId);
   return {
     ...processes ? { backgroundProcesses: { capturedAtMs: Date.now(), processes } } : {},
+    backgroundWork: backgroundWork(sessionId),
     // The working state is the one the turn's notifications set, which
     // daemon.load_session reports as the Daemon's own.
     ...turn ? { isAgentLoopInProgress: true } : {},
@@ -40009,7 +40010,11 @@ function finishTurn(daemon2, sessionId, turnId, reason) {
     tokenUsage: emptyTokenUsage(),
     lastCallTokenUsage: LAST_CALL_TOKEN_USAGE
   });
-  daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "idle" });
+  daemon2.notify(sessionId, {
+    type: "droid_working_state_changed",
+    newState: "idle",
+    backgroundWork: backgroundWork(sessionId)
+  });
   if (reason === "completed" || reason === "spec_handoff") drainHeld(sessionId);
   else heldMessages.delete(sessionId);
 }
@@ -40332,6 +40337,114 @@ The command's result will be delivered automatically when it finishes.`,
       });
       await streamText(daemon2, sessionId, options.reply);
       finishTurn(daemon2, sessionId, userMessageId, "completed");
+    })();
+    return {};
+  };
+}
+var backgroundScripts = /* @__PURE__ */ new Map();
+function backgroundWork(sessionId) {
+  return (backgroundProcesses.get(sessionId)?.length ?? 0) + (backgroundScripts.get(sessionId)?.size ?? 0);
+}
+function backgroundScriptTurn(options) {
+  return (params, context, request) => {
+    const sessionId = String(params["sessionId"]);
+    const daemon2 = context.daemon;
+    const userMessageId = typeof params["messageId"] === "string" ? params["messageId"] : randomUUID5();
+    void (async () => {
+      startTurn(daemon2, sessionId, userMessageId, String(params["text"]), String(request.id));
+      const run = `call_${randomUUID5().slice(0, 8)}_1`;
+      const script = `// @script: {"startInBackground": true}
+await tools.Execute({command: ${JSON.stringify(options.command)}, riskLevel: 'low'})
+notify('progress')`;
+      const toolUse = { type: "tool_use", id: run, name: "Script", input: { script } };
+      daemon2.notify(sessionId, { type: "tool_call", toolUse });
+      const committed = Date.now();
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: { id: randomUUID5(), role: "assistant", content: [toolUse], createdAt: committed, updatedAt: committed },
+        parentId: userMessageId
+      });
+      daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "executing_tool" });
+      const scripts = backgroundScripts.get(sessionId) ?? /* @__PURE__ */ new Set();
+      scripts.add(run);
+      backgroundScripts.set(sessionId, scripts);
+      daemon2.notify(sessionId, {
+        type: "tool_result",
+        toolUseId: run,
+        content: [
+          { type: "text", text: "[Script running \xB7 0.0 s elapsed \xB7 last event 0.0 s ago \xB7 0 pending calls]" },
+          { type: "text", text: JSON.stringify({ toolCallId: run, status: "running" }) }
+        ],
+        isError: false,
+        messageId: randomUUID5()
+      });
+      await streamText(daemon2, sessionId, options.reply);
+      finishTurn(daemon2, sessionId, userMessageId, "completed");
+      await sleep(options.delayMs ?? 200);
+      const call = `${randomUUID5()}-1`;
+      const nested = {
+        type: "tool_use",
+        id: call,
+        name: "Execute",
+        input: { command: options.command, riskLevel: "low" },
+        scriptExecution: { runId: run, outerToolUseId: run }
+      };
+      let at = Date.now();
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: { id: `repl-tool-call:${call}`, role: "assistant", visibility: "user_only", content: [nested], createdAt: at, updatedAt: at }
+      });
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: {
+          id: `repl-tool-result:${call}`,
+          role: "tool",
+          content: [{ type: "tool_result", toolUseId: call, content: options.toolOutput ?? "", isError: false }],
+          createdAt: at,
+          updatedAt: at
+        }
+      });
+      const notifyId = `script:notify:${sessionId}:${run}:${randomUUID5()}-2`;
+      at = Date.now();
+      daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "streaming_assistant_message" });
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: {
+          id: notifyId,
+          role: "user",
+          visibility: "llm_only",
+          content: [{ type: "text", text: `Script notification:
+${options.notification}` }],
+          createdAt: at,
+          updatedAt: at
+        }
+      });
+      daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "thinking" });
+      await streamText(daemon2, sessionId, options.notificationReply);
+      scripts.delete(run);
+      finishTurn(daemon2, sessionId, notifyId, "completed");
+      const endId = `script-completion:${sessionId}:${run}:${run}`;
+      at = Date.now();
+      daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "streaming_assistant_message" });
+      daemon2.notify(sessionId, {
+        type: "create_message",
+        message: {
+          id: endId,
+          role: "user",
+          visibility: "llm_only",
+          content: [
+            {
+              type: "text",
+              text: `Script ${run} reached its terminal state with result ${JSON.stringify({ toolCallId: run, status: "completed", result: null })}. This is a new asynchronous lifecycle event.`
+            }
+          ],
+          createdAt: at,
+          updatedAt: at
+        }
+      });
+      daemon2.notify(sessionId, { type: "droid_working_state_changed", newState: "thinking" });
+      await streamText(daemon2, sessionId, "The background Script finished.");
+      finishTurn(daemon2, sessionId, endId, "completed");
     })();
     return {};
   };
@@ -40735,6 +40848,8 @@ function turnHandler(turn) {
       return specTurn(turn);
     case "backgroundProcess":
       return backgroundProcessTurn(turn);
+    case "backgroundScript":
+      return backgroundScriptTurn(turn);
   }
 }
 var handler = turnHandler(spec.turn);
