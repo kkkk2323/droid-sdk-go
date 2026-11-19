@@ -69,6 +69,13 @@ type Message struct {
 // daemon.kill_background_process stops it, reports the list without it and
 // starts the turn droid starts on the command's end. Pid defaults to 48213,
 // OutputFile to a file under /tmp named after the tool use.
+// "backgroundScript" starts a Script in the background and ends the turn
+// with Reply, idle with background work; after DelayMs (200 by default) the
+// Script runs Command (answered with ToolOutput) and calls notify(), which
+// gives the agent Notification as a model-only script:notify message that
+// starts a turn replying NotificationReply; the Script then ends, and its
+// script-completion message starts one more turn. Every idle tells
+// backgroundWork, as load_session does.
 type Turn struct {
 	Kind        string         `json:"kind"`
 	Deltas      []string       `json:"deltas,omitempty"`
@@ -86,6 +93,9 @@ type Turn struct {
 	Title       string         `json:"title,omitempty"`
 	Pid         int            `json:"pid,omitempty"`
 	OutputFile  string         `json:"outputFile,omitempty"`
+	// Notification and NotificationReply are a backgroundScript turn's.
+	Notification      string `json:"notification,omitempty"`
+	NotificationReply string `json:"notificationReply,omitempty"`
 	// OptionDescriptions explain Options, index-aligned. With them an
 	// askUser or queuedAskUser turn asks in Claude Code's AskUserQuestion
 	// shape and its question carries them, as droid 1.2 does for Anthropic

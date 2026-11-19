@@ -133,8 +133,9 @@ export function withQueue(handler: MethodHandler): MethodHandler {
  * What daemon.load_session reports of a Session's scripted turn, as the real
  * Daemon does: whether the agent loop runs, the messages it holds for after
  * the turn (queuedMessages), and the requests it admitted
- * (pendingMessageRequestIds: the running turn's and the held ones), and the
- * background processes its turns left running (droid 1.0).
+ * (pendingMessageRequestIds: the running turn's and the held ones), the
+ * background processes its turns left running (droid 1.0), and how much
+ * background work it has (backgroundWork).
  */
 export function turnLoadState(sessionId: string): Record<string, unknown> {
   const turn = activeTurns.get(sessionId)
@@ -142,6 +143,7 @@ export function turnLoadState(sessionId: string): Record<string, unknown> {
   const processes = backgroundProcesses.get(sessionId)
   return {
     ...(processes ? { backgroundProcesses: { capturedAtMs: Date.now(), processes } } : {}),
+    backgroundWork: backgroundWork(sessionId),
     // The working state is the one the turn's notifications set, which
     // daemon.load_session reports as the Daemon's own.
     ...(turn ? { isAgentLoopInProgress: true } : {}),
@@ -306,7 +308,12 @@ function finishTurn(
     tokenUsage: emptyTokenUsage(),
     lastCallTokenUsage: LAST_CALL_TOKEN_USAGE,
   })
-  daemon.notify(sessionId, { type: 'droid_working_state_changed', newState: 'idle' })
+  // droid counts the work left running as the Session goes idle.
+  daemon.notify(sessionId, {
+    type: 'droid_working_state_changed',
+    newState: 'idle',
+    backgroundWork: backgroundWork(sessionId),
+  })
   if (reason === 'completed' || reason === 'spec_handoff') drainHeld(sessionId)
   else heldMessages.delete(sessionId)
 }
@@ -704,6 +711,145 @@ export function backgroundProcessTurn(options: BackgroundProcessTurnOptions): Me
   }
 }
 
+export interface BackgroundScriptTurnOptions {
+  /** The command the Script runs once its turn ended. */
+  command: string
+  /** Reply streamed once the Script started, which ends the turn. */
+  reply: string
+  /** The command's output. */
+  toolOutput?: string
+  /** What the Script tells the agent with notify(). */
+  notification: string
+  /** Reply of the turn the notification starts. */
+  notificationReply: string
+  /** How long the Script waits after its turn ended before it runs the command. */
+  delayMs?: number
+}
+
+/** The Scripts each Session left running in the background, by run. */
+const backgroundScripts = new Map<string, Set<string>>()
+
+/** How much work a Session left running, as droid counts it on going idle. */
+function backgroundWork(sessionId: string): number {
+  return (backgroundProcesses.get(sessionId)?.length ?? 0) + (backgroundScripts.get(sessionId)?.size ?? 0)
+}
+
+/**
+ * Handler for `daemon.add_user_message` where the agent starts a Script in
+ * the background (`// @script: {"startInBackground": true}`), as droid 1.x
+ * does: the Script call answers at once that it runs, and the turn ends
+ * with `reply`, idle with background work. After `delayMs` the Script runs
+ * `command` (its calls are user-only messages tied to the run by
+ * scriptExecution), then calls notify(): the Daemon gives the agent
+ * `notification` as a model-only message (`script:notify:...`) that starts a
+ * turn replying `notificationReply`. The Script then ends, and its end comes
+ * as a model-only `script-completion:...` message that starts a last turn.
+ */
+export function backgroundScriptTurn(options: BackgroundScriptTurnOptions): MethodHandler {
+  return (params, context, request) => {
+    const sessionId = String(params['sessionId'])
+    const daemon = context.daemon
+    const userMessageId =
+      typeof params['messageId'] === 'string' ? params['messageId'] : randomUUID()
+    void (async () => {
+      startTurn(daemon, sessionId, userMessageId, String(params['text']), String(request.id))
+      const run = `call_${randomUUID().slice(0, 8)}_1`
+      const script = `// @script: {"startInBackground": true}\nawait tools.Execute({command: ${JSON.stringify(options.command)}, riskLevel: 'low'})\nnotify('progress')`
+      const toolUse = { type: 'tool_use', id: run, name: 'Script', input: { script } }
+      daemon.notify(sessionId, { type: 'tool_call', toolUse })
+      const committed = Date.now()
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: { id: randomUUID(), role: 'assistant', content: [toolUse], createdAt: committed, updatedAt: committed },
+        parentId: userMessageId,
+      })
+      daemon.notify(sessionId, { type: 'droid_working_state_changed', newState: 'executing_tool' })
+      const scripts = backgroundScripts.get(sessionId) ?? new Set<string>()
+      scripts.add(run)
+      backgroundScripts.set(sessionId, scripts)
+      daemon.notify(sessionId, {
+        type: 'tool_result',
+        toolUseId: run,
+        content: [
+          { type: 'text', text: '[Script running · 0.0 s elapsed · last event 0.0 s ago · 0 pending calls]' },
+          { type: 'text', text: JSON.stringify({ toolCallId: run, status: 'running' }) },
+        ],
+        isError: false,
+        messageId: randomUUID(),
+      })
+      await streamText(daemon, sessionId, options.reply)
+      finishTurn(daemon, sessionId, userMessageId, 'completed')
+
+      await sleep(options.delayMs ?? 200)
+      const call = `${randomUUID()}-1`
+      const nested = {
+        type: 'tool_use',
+        id: call,
+        name: 'Execute',
+        input: { command: options.command, riskLevel: 'low' },
+        scriptExecution: { runId: run, outerToolUseId: run },
+      }
+      let at = Date.now()
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: { id: `repl-tool-call:${call}`, role: 'assistant', visibility: 'user_only', content: [nested], createdAt: at, updatedAt: at },
+      })
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: {
+          id: `repl-tool-result:${call}`,
+          role: 'tool',
+          content: [{ type: 'tool_result', toolUseId: call, content: options.toolOutput ?? '', isError: false }],
+          createdAt: at,
+          updatedAt: at,
+        },
+      })
+
+      const notifyId = `script:notify:${sessionId}:${run}:${randomUUID()}-2`
+      at = Date.now()
+      daemon.notify(sessionId, { type: 'droid_working_state_changed', newState: 'streaming_assistant_message' })
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: {
+          id: notifyId,
+          role: 'user',
+          visibility: 'llm_only',
+          content: [{ type: 'text', text: `Script notification:\n${options.notification}` }],
+          createdAt: at,
+          updatedAt: at,
+        },
+      })
+      daemon.notify(sessionId, { type: 'droid_working_state_changed', newState: 'thinking' })
+      await streamText(daemon, sessionId, options.notificationReply)
+      scripts.delete(run)
+      finishTurn(daemon, sessionId, notifyId, 'completed')
+
+      const endId = `script-completion:${sessionId}:${run}:${run}`
+      at = Date.now()
+      daemon.notify(sessionId, { type: 'droid_working_state_changed', newState: 'streaming_assistant_message' })
+      daemon.notify(sessionId, {
+        type: 'create_message',
+        message: {
+          id: endId,
+          role: 'user',
+          visibility: 'llm_only',
+          content: [
+            {
+              type: 'text',
+              text: `Script ${run} reached its terminal state with result ${JSON.stringify({ toolCallId: run, status: 'completed', result: null })}. This is a new asynchronous lifecycle event.`,
+            },
+          ],
+          createdAt: at,
+          updatedAt: at,
+        },
+      })
+      daemon.notify(sessionId, { type: 'droid_working_state_changed', newState: 'thinking' })
+      await streamText(daemon, sessionId, 'The background Script finished.')
+      finishTurn(daemon, sessionId, endId, 'completed')
+    })()
+    return {}
+  }
+}
 /**
  * Handler for `daemon.kill_background_process` (droid 1.0): stops a process a
  * background turn started, reports the list without it, and, as droid does,

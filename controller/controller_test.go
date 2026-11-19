@@ -528,6 +528,84 @@ func TestBackgroundProcessesFollowTheDaemon(t *testing.T) {
 	})
 }
 
+// A Script a turn leaves running in the background counts as background
+// work until it ends; its notify() and its end come as model-only messages
+// that each start a turn.
+func TestABackgroundScriptCountsAsBackgroundWork(t *testing.T) {
+	d := fakedaemon.Start(t, fakedaemon.Scenario{
+		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},
+		Turn: &fakedaemon.Turn{Kind: "backgroundScript", Command: "ocr-status", ToolOutput: "2 pages/s", Reply: "I will report.",
+			Notification: "2 pages/s", NotificationReply: "The OCR runs at 2 pages a second.", DelayMs: 300},
+	})
+	c, r := start(t, d, controller.Config{})
+	ctx := context.Background()
+	id := d.Sessions[0].SessionID
+	if _, err := c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id}); err != nil {
+		t.Fatal(err)
+	}
+	s := c.Store().Session(id)
+	if n, known := s.BackgroundWork(); n != 0 || !known {
+		t.Fatalf("on load %d %v", n, known)
+	}
+	if _, err := c.AddUserMessage(ctx, protocol.AddUserMessageParams{SessionID: id, Text: "Check on the OCR"}); err != nil {
+		t.Fatal(err)
+	}
+	turnOf := func(prefix string) func(controller.Event) bool {
+		return func(e controller.Event) bool {
+			n, ok := e.(controller.SessionNotification)
+			if !ok {
+				return false
+			}
+			cm, ok := n.Value.(*protocol.AgentTurnCompletedNotification)
+			return ok && strings.HasPrefix(cm.TurnID, prefix)
+		}
+	}
+	idle := func(e controller.Event) bool {
+		n, ok := e.(controller.SessionNotification)
+		if !ok {
+			return false
+		}
+		w, ok := n.Value.(*protocol.DroidWorkingStateChangedNotification)
+		return ok && w.NewState == protocol.DroidWorkingStateIdle
+	}
+	_, next := r.wait(t, 0, "idle after the turn", idle)
+	if n, _ := s.BackgroundWork(); n != 1 {
+		t.Fatalf("with the Script running %d", n)
+	}
+	// A load reports it too.
+	c.Forget(id)
+	res, err := c.LoadSession(ctx, protocol.LoadSessionParams{SessionID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = c.Store().Session(id)
+	if res.BackgroundWork == nil || *res.BackgroundWork != 1 {
+		t.Fatalf("load result %v", res.BackgroundWork)
+	}
+	if n, _ := s.BackgroundWork(); n != 1 {
+		t.Fatalf("after a load %d", n)
+	}
+	_, next = r.wait(t, next, "the turn on the notification", turnOf("script:notify:"+id+":"))
+	_, next = r.wait(t, next, "the turn on the Script's end", turnOf("script-completion:"+id+":"))
+	r.wait(t, next, "idle after the Script ended", idle)
+	if n, _ := s.BackgroundWork(); n != 0 {
+		t.Fatalf("after the Script ended %d", n)
+	}
+	var notified, nested, ended bool
+	for _, m := range s.Messages() {
+		switch {
+		case strings.HasPrefix(m.ID, "script:notify:"):
+			notified = m.Visibility == protocol.MessageVisibilityLLMOnly && strings.Contains(string(m.Content[0].Raw), `Script notification:\n2 pages/s`)
+		case strings.HasPrefix(m.ID, "repl-tool-call:"):
+			nested = strings.Contains(string(m.Content[0].Raw), `"scriptExecution"`)
+		case strings.HasPrefix(m.ID, "script-completion:"):
+			ended = strings.Contains(string(m.Content[0].Raw), `\"status\":\"completed\"`)
+		}
+	}
+	if !notified || !nested || !ended {
+		t.Fatalf("notified %v, nested %v, ended %v: %+v", notified, nested, ended, s.Messages())
+	}
+}
 func TestReconnectLoadsSessionsAgain(t *testing.T) {
 	d := fakedaemon.Start(t, fakedaemon.Scenario{
 		Sessions: []fakedaemon.SessionSpec{{Title: "Chat", Cwd: "/Users/dev/acme-web"}},

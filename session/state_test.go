@@ -376,6 +376,59 @@ func TestBackgroundProcesses(t *testing.T) {
 	}
 }
 
+func workingChanged(state string, backgroundWork ...int) map[string]any {
+	n := map[string]any{"type": "droid_working_state_changed", "newState": state}
+	if len(backgroundWork) > 0 {
+		n["backgroundWork"] = backgroundWork[0]
+	}
+	return n
+}
+
+func TestBackgroundWork(t *testing.T) {
+	s, _ := newTestStore()
+	const id = "s1"
+	loadWith(t, s, id, protocol.LoadSessionResult{})
+	sess := s.Session(id)
+	if n, known := sess.BackgroundWork(); n != 0 || known {
+		t.Fatalf("before the Daemon told %d %v", n, known)
+	}
+	rec := record(s)
+	send(t, s, id, workingChanged("idle", 2))
+	if n, known := sess.BackgroundWork(); n != 2 || !known || !rec.has(Event{Kind: EventMetadataUpdated, SessionID: id}) {
+		t.Fatalf("idle with work %d %v", n, known)
+	}
+	// A turn's states do not count it: the count stands.
+	send(t, s, id, workingChanged("thinking"))
+	if n, _ := sess.BackgroundWork(); n != 2 {
+		t.Fatalf("while a turn runs %d", n)
+	}
+	send(t, s, id, workingChanged("idle", 0))
+	if n, known := sess.BackgroundWork(); n != 0 || !known {
+		t.Fatalf("idle without work %d %v", n, known)
+	}
+
+	// A load brings the Daemon's count, unless a working state came while it was out.
+	one, three := int64(1), int64(3)
+	tok := s.BeginLoad(id)
+	s.ApplyLoadResult(tok, &protocol.LoadSessionResult{BackgroundWork: &one}, 0)
+	if n, _ := sess.BackgroundWork(); n != 1 {
+		t.Fatalf("after a load %d", n)
+	}
+	tok = s.BeginLoad(id)
+	send(t, s, id, workingChanged("idle", 0))
+	s.ApplyLoadResult(tok, &protocol.LoadSessionResult{BackgroundWork: &three}, 0)
+	if n, _ := sess.BackgroundWork(); n != 0 {
+		t.Fatalf("a load's older count replaced a live one: %d", n)
+	}
+
+	// The worker ends its work as it exits.
+	send(t, s, id, workingChanged("idle", 1))
+	send(t, s, id, map[string]any{"type": "session_process_exited", "message": "exited", "timestamp": 1})
+	if n, known := sess.BackgroundWork(); n != 0 || !known {
+		t.Fatalf("after the worker exited %d %v", n, known)
+	}
+}
+
 func TestLoadThenPrependOlderPage(t *testing.T) {
 	s, _ := newTestStore()
 	const id = "s1"

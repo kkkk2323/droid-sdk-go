@@ -128,6 +128,13 @@ which `PrependOlderMessages` brings back.
   `daemon.kill_background_process` (`Client.KillBackgroundProcess`) stops
   one, after which droid gives the agent the end as a model-only user
   message `execute-completion:<toolUseId>` that starts a turn.
+- Background work: `Session.BackgroundWork` is how much work the agent left
+  running that will wake it (background processes, Scripts left running,
+  ends still owed), as droid counts it in `droid_working_state_changed`
+  going idle and in load's `backgroundWork`; 0 once the worker exits. A
+  Script's `notify()` and its end reach the agent as model-only messages
+  `script:notify:<session>:<run>:<id>` and
+  `script-completion:<session>:<run>:<toolUseId>`, each starting a turn.
 - Queued messages across a dropped connection (droid 1.1's reconciliation):
   they stay shown; the reload's `pendingMessageRequestIds` keeps the ones
   the Daemon admitted and drops the rest, and none of them is sent again.
@@ -170,10 +177,12 @@ instead of running an agent, and checks every message it sends with
   todo list, structured output, `spec` (ExitSpecMode and its handoff, as
   droid 0.244 does them), or `backgroundProcess` (an Execute left running in
   the background, with droid 1.0's launch text, `background_processes_changed`
-  and `daemon.kill_background_process`). Its `load_session` reports the
+  and `daemon.kill_background_process`), or `backgroundScript` (a Script
+  left running that calls a tool, then `notify()`, then ends; every idle
+  tells `backgroundWork`). Its `load_session` reports the
   scripted turn's state: the agent loop running, held messages
   (`queuedMessages`), `pendingMessageRequestIds`, background processes and
-  the permission requests no Client answered yet (`pendingPermissions`).
+  work, and the permission requests no Client answered yet (`pendingPermissions`).
   `daemon.get_session_turn_outcome` answers from the turns it ran, or a
   test made up with `Notify` (a user message, then `agent_turn_completed`
   with its id), as droid 1.4.1 reads them from the transcript.

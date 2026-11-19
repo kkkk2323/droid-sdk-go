@@ -14,6 +14,7 @@ import {
   structuredTurn,
   specTurn,
   backgroundProcessTurn,
+  backgroundScriptTurn,
   killBackgroundProcessHandler,
   interruptHandler,
   resolveQueuedHandler,
@@ -58,6 +59,15 @@ type TurnSpec =
   | { kind: 'structured'; structured: Record<string, unknown> }
   | { kind: 'spec'; plan: string; title?: string; reply: string }
   | { kind: 'backgroundProcess'; command: string; reply: string; pid?: number; outputFile?: string }
+  | {
+      kind: 'backgroundScript'
+      command: string
+      reply: string
+      toolOutput?: string
+      notification: string
+      notificationReply: string
+      delayMs?: number
+    }
 type Spec = {
   sessions?: SessionSpec[]
   turn?: TurnSpec
@@ -89,6 +99,8 @@ function turnHandler(turn: TurnSpec | undefined) {
       return specTurn(turn)
     case 'backgroundProcess':
       return backgroundProcessTurn(turn)
+    case 'backgroundScript':
+      return backgroundScriptTurn(turn)
   }
 }
 
